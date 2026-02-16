@@ -1,0 +1,5 @@
+config.txt
+venv/
+CIS*
+cis_benchmark.json
+audit_report_verbose.txt
