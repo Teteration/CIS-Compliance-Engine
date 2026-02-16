@@ -1,6 +1,32 @@
+# CIS Compliance Engine Configuration
+
+# Define your target environment here
 target:
-  type: "oracle"  # or 'ssh_os', 'docker'
-  host: "172.16.10.50"
-  credentials:
-    user: "auditor"
-    password: "${ENV_PASSWORD}" # Supports env vars for security
+  # Driver type matches the filename in src/drivers/ (e.g., 'oracle', 'linux')
+  driver: "oracle"
+  host: "172.24.39.71"
+  
+  # Connection details specific to the driver
+  connection:
+    port: 1521
+    service_name: "pushrcvrdb"
+    user: "pentest"
+    password: "pentest" # In prod, use env vars!
+
+  # Optional SSH access for OS-level checks (extproc, file perms)
+  ssh:
+    enabled: true
+    user: "oracle"
+    port: 22
+    password: "" # Leave empty to prompt securely at runtime
+
+audit:
+  # The benchmark file to parse
+  benchmark_pdf: "CIS_Oracle_Database_19c_Benchmark_v1.2.0.pdf"
+  # Cache parsed rules to speed up subsequent runs
+  rules_cache: "rules_cache.json"
+
+reporting:
+  output_dir: "reports"
+  # formats: json, text, or both
+  format: "both"

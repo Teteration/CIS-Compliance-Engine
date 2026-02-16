@@ -4,3 +4,17 @@ CIS*
 cis_benchmark.json
 audit_report_verbose.txt
 .gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+venv/
+
+# Configuration (Security!)
+config/config.yaml
+
+# Runtime data
+reports/
+*.pdf
+*.json
+*.log

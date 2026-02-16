@@ -1,0 +1,5 @@
+pdfplumber==0.10.3
+oracledb==2.0.0
+paramiko==3.4.0
+pyyaml==6.0.1
+colorama==0.4.6
