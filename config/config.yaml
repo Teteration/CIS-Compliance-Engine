@@ -1,0 +1,6 @@
+target:
+  type: "oracle"  # or 'ssh_os', 'docker'
+  host: "172.16.10.50"
+  credentials:
+    user: "auditor"
+    password: "${ENV_PASSWORD}" # Supports env vars for security
