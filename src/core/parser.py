@@ -71,9 +71,6 @@ class CISPdfParser:
                     self._process_checks(current_rule, audit_buffer, sql_pattern)
                     
                     # LOGIC: Only save if it has checks OR if it's a new ID we haven't seen.
-                    # If we already have this ID and the new one has no checks, ignore it.
-                    # If we already have this ID (from TOC) and now we found checks, OVERWRITE it.
-                    
                     r_id = current_rule['id']
                     
                     # If this is the first time seeing this ID, save it.
@@ -104,7 +101,10 @@ class CISPdfParser:
                 rules_map[r_id] = current_rule
                 
         # Return list sorted by ID
-        return list(rules_map.values())
+        def parse_id(rid):
+            try: return tuple(map(int, rid.split('.')))
+            except: return (0,)
+        return sorted(rules_map.values(), key=lambda x: parse_id(x['id']))
 
     def _process_checks(self, rule, text, sql_regex):
         sqls = sql_regex.findall(text)
@@ -114,7 +114,9 @@ class CISPdfParser:
             if clean_q.upper().startswith("SELECT") or clean_q.upper().startswith("WITH"):
                 rule['checks'].append({'type': 'sql', 'cmd': clean_q})
 
-        words = text.split(' ')
+        # --- FIX: Split by ANY whitespace (newline or space) ---
+        # This fixes the issue where "Audit:\ngrep" was seen as one word
+        words = text.split() 
         for i, word in enumerate(words):
             if word in ['grep', 'find', 'ls', 'opatch']:
                 cmd = " ".join(words[i:i+15]).replace("Windows environment:", "")

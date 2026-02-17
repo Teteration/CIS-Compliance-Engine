@@ -3,6 +3,7 @@ import logging
 import argparse
 import sys
 import os
+import re
 import warnings
 from datetime import datetime
 from cryptography.utils import CryptographyDeprecationWarning
@@ -47,6 +48,13 @@ def clean_output(raw):
     s = s.replace("[('", "").replace("',)]", "").replace("')]", "")
     return s[:50] # Truncate if too long
 
+def clean_title(title):
+    # Remove trailing page numbers (e.g. "....... 15")
+    t = re.sub(r'\.+\s*\d+$', '', title)
+    # Remove duplicate (Automated) tags
+    t = t.replace("(Automated)", "").replace("()", "").strip()
+    return t
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', default='config/config.yaml')
@@ -75,20 +83,23 @@ def main():
 
     # 3. Execution
     audit_results = []
-    print("\n" + "="*120)
-    print(f"{'TIME':<10} {'TYPE':<10} {'ID':<10} {'STATUS':<10} {'TITLE':<50} {'RESULT'}")
-    print("="*120)
+    print("\n" + "="*140)
+    # Added NO. column and increased TITLE width
+    print(f"{'NO.':<4} {'TIME':<9} {'TYPE':<7} {'ID':<8} {'STATUS':<7} {'TITLE':<60} {'RESULT'}")
+    print("="*140)
     
-    for rule in rules:
+    for idx, rule in enumerate(rules, 1):
         rule_result = "PASS"
         rule_checks = []
         found_result = "None"
+        clean_t = clean_title(rule['title'])
         
         # Determine Type
-        is_manual = not bool(rule.get('checks'))
-        check_type = "MANUAL" if is_manual else "AUTO"
-
-        if not is_manual:
+        if not rule.get('checks'):
+            rule_result = "MANUAL"
+            check_type = "MANUAL"
+        else:
+            check_type = "AUTO"
             for check in rule['checks']:
                 res = driver.execute_check(check['type'], check['cmd'])
                 
@@ -108,20 +119,21 @@ def main():
 
         # --- THE LOGGING LINE ---
         # Color coding
-        color = Fore.GREEN if rule_result == "PASS" else Fore.RED
-        if check_type == "MANUAL": color = Fore.YELLOW
+        if rule_result == "FAIL": color = Fore.RED
+        elif rule_result == "MANUAL": color = Fore.YELLOW
+        else: color = Fore.GREEN
         
-        # Format: [TIME] [TYPE] [ID] [STATUS] [TITLE] [RESULT]
-        print(f"{Style.DIM}{get_time()}{Style.RESET_ALL} "
-              f"{check_type:<10} "
-              f"{rule['id']:<10} "
-              f"{color}{rule_result:<10}{Style.RESET_ALL} "
-              f"{rule['title'][:48]:<50} "
+        # Format: [NO] [TIME] [TYPE] [ID] [STATUS] [TITLE] [RESULT]
+        print(f"{Style.DIM}{idx:<4}{get_time()}{Style.RESET_ALL} "
+              f"{check_type:<7} "
+              f"{rule['id']:<8} "
+              f"{color}{rule_result:<7}{Style.RESET_ALL} "
+              f"{clean_t:<60} "
               f"{found_result}")
 
         audit_results.append({
             "id": rule['id'],
-            "title": rule['title'],
+            "title": clean_t,
             "result": rule_result,
             "checks": rule_checks
         })
@@ -130,7 +142,7 @@ def main():
     reporter = Reporter(cfg['reporting']['output_dir'])
     report_file = reporter.generate(audit_results, cfg['target']['host'])
     
-    print("\n" + "="*120)
+    print("\n" + "="*140)
     print(f"[+] Report generated: {report_file}")
     driver.disconnect()
 

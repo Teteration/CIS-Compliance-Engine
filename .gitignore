@@ -12,7 +12,7 @@ venv/
 
 # Configuration (Security!)
 config/config.yaml
-
+.vs*
 # Runtime data
 reports/
 *.pdf
