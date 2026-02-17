@@ -18,7 +18,7 @@ target:
     enabled: true
     user: "oracle"
     port: 22
-    password: "" # Leave empty to prompt securely at runtime
+    password: "P@ssw0rdP@ssw0rd" # Leave empty to prompt securely at runtime
 
 audit:
   # The benchmark file to parse

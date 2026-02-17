@@ -3,124 +3,136 @@ import logging
 import argparse
 import sys
 import os
+import warnings
+from datetime import datetime
+from cryptography.utils import CryptographyDeprecationWarning
+from colorama import init, Fore, Style
 
-# Clean imports thanks to your __init__.py files
-from src.core import CISPdfParser, Reporter
-from src.drivers import OracleDriver
+# Suppress Warnings
+warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 
-# Configure Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("CCE")
+from src.core.parser import CISPdfParser
+from src.core.reporter import Reporter
+from src.drivers.oracle import OracleDriver
 
-def load_config(path: str) -> dict:
-    """Safely loads the YAML configuration file."""
+# Init Colorama
+init(autoreset=True)
+
+# Configure Logging (Silent for internal libraries)
+logging.basicConfig(level=logging.CRITICAL)
+
+def load_config(path):
     if not os.path.exists(path):
-        logger.critical(f"Configuration file not found at: {path}")
+        print(f"[!] Config file not found: {path}")
         sys.exit(1)
-    
-    try:
-        with open(path, 'r') as f:
-            return yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.critical(f"Error parsing YAML config: {e}")
-        sys.exit(1)
+    with open(path) as f:
+        return yaml.safe_load(f)
 
-def get_driver(config: dict):
-    """
-    Factory method to instantiate the correct driver based on config.
-    This makes the tool scalable to other targets (Linux, Docker, etc).
-    """
-    driver_type = config['target'].get('driver', '').lower()
-    
-    if driver_type == 'oracle':
-        # Pass the specific target configuration to the driver
+def get_driver(config):
+    driver_name = config['target']['driver']
+    if driver_name == 'oracle':
         return OracleDriver(config['target'])
-    
-    # Future expansions placeholders
-    # elif driver_type == 'linux':
-    #     return LinuxDriver(config['target'])
-    # elif driver_type == 'docker':
-    #     return DockerDriver(config['target'])
-    
     else:
-        raise ValueError(f"Unsupported driver type in config: '{driver_type}'")
+        raise ValueError(f"Unsupported driver: {driver_name}")
+
+def get_time():
+    return datetime.now().strftime("%H:%M:%S")
+
+def clean_output(raw):
+    """Clean up the DB output for the log line"""
+    s = str(raw).replace("\n", " ").strip()
+    if "DPY" in s: return "Error"
+    if "No rows" in s: return "Empty"
+    # Convert [('VALUE',)] to just VALUE
+    s = s.replace("[('", "").replace("',)]", "").replace("')]", "")
+    return s[:50] # Truncate if too long
 
 def main():
-    # 1. Parse CLI Arguments
-    parser = argparse.ArgumentParser(description="CIS Compliance Engine (Enterprise Edition)")
-    parser.add_argument('-c', '--config', default='config/config.yaml', help="Path to configuration file")
-    parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose debug logging")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--config', default='config/config.yaml')
     args = parser.parse_args()
 
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
-
-    # 2. Load Configuration
     cfg = load_config(args.config)
     
-    # 3. Parse Benchmark Rules
-    pdf_path = cfg['audit'].get('benchmark_pdf')
-    if not pdf_path or not os.path.exists(pdf_path):
-        logger.critical(f"Benchmark PDF not found: {pdf_path}")
+    # 1. Parse Rules
+    pdf_path = cfg['audit']['benchmark_pdf']
+    if not os.path.exists(pdf_path):
+        print(f"[!] PDF not found: {pdf_path}")
         sys.exit(1)
         
-    try:
-        engine = CISPdfParser(pdf_path)
-        rules = engine.parse()
-        logger.info(f"Successfully loaded {len(rules)} audit rules from PDF.")
-    except Exception as e:
-        logger.critical(f"Failed to parse PDF: {e}")
-        sys.exit(1)
+    print(f"[*] Parsing PDF...", end="\r")
+    engine = CISPdfParser(pdf_path)
+    rules = engine.parse()
+    print(f"\n[+] Loaded {len(rules)} Unique Rules.")
 
-    # 4. Initialize Audit Driver
-    driver = None
+    # 2. Init Driver
     try:
         driver = get_driver(cfg)
         driver.connect()
     except Exception as e:
-        logger.critical(f"Driver initialization failed: {e}")
+        print(f"[!] Driver Init Failed: {e}")
         sys.exit(1)
 
-    # 5. Execution Loop
+    # 3. Execution
     audit_results = []
-    print("\n" + "="*60)
-    print(f"🚀 STARTING AUDIT: {cfg['target']['host']}")
-    print("="*60 + "\n")
+    print("\n" + "="*120)
+    print(f"{'TIME':<10} {'TYPE':<10} {'ID':<10} {'STATUS':<10} {'TITLE':<50} {'RESULT'}")
+    print("="*120)
     
-    try:
-        for rule in rules:
-            print(f"Checking {rule['id']}...", end="\r")
-            
-            # Default state
-            rule_result = "PASS"
-            rule_checks = []
+    for rule in rules:
+        rule_result = "PASS"
+        rule_checks = []
+        found_result = "None"
+        
+        # Determine Type
+        is_manual = not bool(rule.get('checks'))
+        check_type = "MANUAL" if is_manual else "AUTO"
 
-            # If no checks were extracted, mark as Manual/Skipped
-            if not rule.get('checks'):
-                rule_result = "MANUAL"
-            
-            else:
-                for check in rule['checks']:
-                    # Execute the check using the abstract driver
-                    res = driver.execute_check(check['type'], check['cmd'])
-                    
-                    check_record = {
-                        'cmd': check['cmd'],
-                        'output': res.get('output', ''),
-                        'status': res.get('status', 'ERROR')
-                    }
-                    rule_checks.append(check_record)
-                    
-                    # Any single failure fails the whole rule
-                    if res.get('status') in ['FAIL', 'ERROR']:
-                        rule_result = "FAIL"
+        if not is_manual:
+            for check in rule['checks']:
+                res = driver.execute_check(check['type'], check['cmd'])
+                
+                check_record = {
+                    'cmd': check['cmd'],
+                    'output': res['output'],
+                    'status': res['status']
+                }
+                rule_checks.append(check_record)
+                
+                if res['status'] in ['FAIL', 'ERROR']:
+                    rule_result = "FAIL"
+                    found_result = clean_output(res['output'])
+                elif rule_result == "PASS":
+                    # If passing, capture the output too (e.g. "TRUE")
+                    found_result = clean_output(res['output'])
 
-            # Store Result
-            audit_results.append({
-                "id": rule['id'],
-                "title": rule['title'],
-                "description": rule.get('description', ''),
+        # --- THE LOGGING LINE ---
+        # Color coding
+        color = Fore.GREEN if rule_result == "PASS" else Fore.RED
+        if check_type == "MANUAL": color = Fore.YELLOW
+        
+        # Format: [TIME] [TYPE] [ID] [STATUS] [TITLE] [RESULT]
+        print(f"{Style.DIM}{get_time()}{Style.RESET_ALL} "
+              f"{check_type:<10} "
+              f"{rule['id']:<10} "
+              f"{color}{rule_result:<10}{Style.RESET_ALL} "
+              f"{rule['title'][:48]:<50} "
+              f"{found_result}")
+
+        audit_results.append({
+            "id": rule['id'],
+            "title": rule['title'],
+            "result": rule_result,
+            "checks": rule_checks
+        })
+
+    # 4. Report
+    reporter = Reporter(cfg['reporting']['output_dir'])
+    report_file = reporter.generate(audit_results, cfg['target']['host'])
+    
+    print("\n" + "="*120)
+    print(f"[+] Report generated: {report_file}")
+    driver.disconnect()
+
+if __name__ == "__main__":
+    main()
