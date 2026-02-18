@@ -1,6 +1,5 @@
 # CIS Compliance Engine (CCE)
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/yourusername/cis-compliance-engine/main)
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Target Support](https://img.shields.io/badge/targets-Oracle%20%7C%20Linux%20%7C%20Docker-orange)
