@@ -39,8 +39,8 @@
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/Teteration/CIS-Compliance-Suite.git
-cd CIS-Compliance-Suite
+git clone https://github.com/Teteration/CIS-Compliance-Engine.git
+cd CIS-Compliance-Engine
 pip install -r requirements.txt
 
 ```
