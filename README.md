@@ -6,6 +6,9 @@
 
 ---
 
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/4b9e08b9-3b02-4139-a5e0-3f4162ba6f83" />
+
+
 ## 📸 Overview
 
 *Above: CCE performing a live audit against an Oracle Database, identifying 113 unique controls.*
