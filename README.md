@@ -6,7 +6,7 @@
 
 ---
 
-<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/4b9e08b9-3b02-4139-a5e0-3f4162ba6f83" />
+<img width="2665" height="1135" alt="image" src="https://github.com/user-attachments/assets/8095bdb1-e674-4f7e-a9f3-ca469977faf2" />
 
 
 ## 📸 Overview
