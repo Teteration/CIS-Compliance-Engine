@@ -11,14 +11,14 @@ target:
     port: 1521
     service_name: "pushrcvrdb"
     user: "pentest"
-    password: "pentest" # In prod, use env vars!
+    password: "pentest"
 
   # Optional SSH access for OS-level checks (extproc, file perms)
   ssh:
     enabled: true
     user: "oracle"
     port: 22
-    password: "P@ssw0rdP@ssw0rd" # Leave empty to prompt securely at runtime
+    password: "P@ssw0rdP@ssw0rd"
 
 audit:
   # The benchmark file to parse

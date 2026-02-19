@@ -49,7 +49,6 @@ def clean_output(raw):
     return s[:50] # Truncate if too long
 
 def clean_title(title):
-    # Remove trailing page numbers (e.g. "....... 15")
     t = re.sub(r'\.+\s*\d+$', '', title)
     # Remove duplicate (Automated) tags
     t = t.replace("(Automated)", "").replace("()", "").strip()
