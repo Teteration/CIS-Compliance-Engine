@@ -19,7 +19,7 @@
 
 * **Dynamic Rule Extraction:** Directly ingests CIS Benchmark PDFs, extracting Rule IDs, Titles, and Audit Procedures automatically.
 * **Smart Command Detection:** Uses advanced heuristics to distinguish between SQL queries (`SELECT`, `WITH`) and Shell commands (`grep`, `ls`, `opatch`), ensuring accurate execution contexts.
-* **Full Coverage:** Validated support for **113+ rules**, including complex multi-line checks.
+* **Full Coverage:** Validated support for **all rules**, including complex multi-line checks.
 
 ### 🛡️ Enterprise-Ready Auditing
 
