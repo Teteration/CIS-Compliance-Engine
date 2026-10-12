@@ -56,7 +56,7 @@ def clean_output(raw):
     if "No rows" in s: return "Empty"
     # Convert [('VALUE',)] to just VALUE
     s = s.replace("[('", "").replace("',)]", "").replace("')]", "")
-    return s[:50]
+    return s[:70]
 
 def clean_title(title):
     t = re.sub(r'\.+\s*\d+$', '', title)
@@ -118,7 +118,7 @@ def run_audit(cfg, rules, driver):
                 f'{status_text} {title[:title_width]:<{title_width}}    {result}')
 
     header = format_row('NO.', 'TIME', 'TYPE', 'ID', 'STATUS', 'TITLE', 'RESULT')
-    separator = '=' * (len(header) - len('RESULT') + 50)
+    separator = '=' * (len(header) - len('RESULT') + 70)
     print("\n" + separator)
     print(header)
     print(separator)
@@ -169,9 +169,10 @@ def run_audit(cfg, rules, driver):
 
         # --- THE LOGGING LINE ---
         # Color coding
-        if rule_result in ("FAIL", "ERROR"): color = Fore.RED
-        elif rule_result in ("MANUAL", "SKIPPED"): color = Fore.YELLOW
-        else: color = Fore.GREEN
+        if rule_result in ("FAIL", "ERROR"): color = Fore.LIGHTRED_EX
+        elif rule_result == "MANUAL": color = Fore.LIGHTYELLOW_EX
+        elif rule_result == "SKIPPED": color = Fore.LIGHTBLUE_EX
+        else: color = Fore.LIGHTGREEN_EX
         
         # Format: [NO] [TIME] [TYPE] [ID] [STATUS] [TITLE] [RESULT]
         print(format_row(idx, get_time(), check_type, rule['id'], rule_result, clean_t, found_result, color))
@@ -186,8 +187,9 @@ def run_audit(cfg, rules, driver):
         })
 
     # 4. Report
+    from src.core.metadata import collect_metadata
     reporter = Reporter(cfg['reporting']['output_dir'])
-    report_file = reporter.generate(audit_results, cfg['target']['host'])
+    report_file = reporter.generate(audit_results, cfg['target']['host'], collect_metadata(cfg, driver))
     
     print("\n" + separator)
     print(f"[+] Report generated: {report_file}")

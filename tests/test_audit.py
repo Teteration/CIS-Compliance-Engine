@@ -15,9 +15,9 @@ from src.main import aggregate_status, get_driver, run_audit, main
 
 class AuditTests(unittest.TestCase):
     def test_only_status_column_is_colored(self):
-        for status, color in [('PASS', '\x1b[32m'), ('FAIL', '\x1b[31m'),
-                              ('ERROR', '\x1b[31m'), ('MANUAL', '\x1b[33m'),
-                              ('SKIPPED', '\x1b[33m')]:
+        for status, color in [('PASS', '\x1b[92m'), ('FAIL', '\x1b[91m'),
+                              ('ERROR', '\x1b[91m'), ('MANUAL', '\x1b[93m'),
+                              ('SKIPPED', '\x1b[94m')]:
             with self.subTest(status=status), patch('src.main.Reporter'):
                 rules = [{'id': '1.1', 'title': 'Ensure test',
                           'checks': [{'type': 'sql', 'cmd': 'SELECT 1'}]}]
@@ -81,7 +81,7 @@ class AuditTests(unittest.TestCase):
                     break
                 rows.append(line)
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0][offset:], result[:50])
+            self.assertEqual(rows[0][offset:], result[:70])
             self.assertEqual(rows[0][offset - 4:offset], ' ' * 4)
             self.assertEqual(rows[0][header.index('TITLE'):offset - 4], title[:100])
             report_rules = reporter.return_value.generate.call_args.args[0]
