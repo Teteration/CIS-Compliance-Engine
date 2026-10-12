@@ -1,0 +1,20 @@
+target:
+  driver: oracle
+  host: localhost
+  connection:
+    port: 1521
+    service_name: ORCLPDB1
+    user: cce_audit
+    password_env: CCE_ORACLE_PASSWORD
+  ssh:
+    enabled: false
+    platform: linux
+    port: 22
+    user: oracle
+    # Set key_filename and verified known_hosts when enabling OS access.
+audit:
+  rules_cache: .cache/rules.json
+  benchmark_pdf: CIS_Oracle_Database_19c_Benchmark_v2.0.0.pdf
+reporting:
+  output_dir: reports
+  format: both

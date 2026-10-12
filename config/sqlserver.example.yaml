@@ -1,0 +1,25 @@
+target:
+  driver: sqlserver
+  host: localhost
+  connection:
+    port: 1433
+    database: master
+    user: cce_audit
+    password_env: CCE_SQLSERVER_PASSWORD
+    encrypt: true
+    trust_server_certificate: false
+    timeout: 10
+  ssh:
+    enabled: false
+    platform: linux
+    port: 22
+    user: cce_audit
+    # Set key_filename and known_hosts when enabling OS access.
+audit:
+  rules_cache: .cache/rules.json
+  benchmark_pdf: CIS_Microsoft_SQL_Server_2017_Benchmark_v1.3.0_Archive.pdf
+  # Overrides apply only to controls with exactly one SQL check.
+  expectations: {}
+reporting:
+  output_dir: reports
+  format: both

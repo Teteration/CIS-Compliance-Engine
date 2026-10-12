@@ -4,8 +4,112 @@
 
 Unlike traditional compliance tools that rely on static, manually maintained templates, CCE dynamically parses official CIS Benchmark PDF documents and converts their audit procedures into executable audit policies.
 
-> **Current Status:** Stable — v1.0.0
-> **Current Focus:** Oracle Database 19c
+> **Current Status:** v1.0.0 codebase with initial SQL Server support; live SQL Server validation pending
+> **Current Focus:** Oracle Database 19c and initial SQL Server support
+
+## Direct database access and optional OS access
+
+Database connections are direct; SSH is not a tunnel or a prerequisite. With
+`target.ssh.enabled: false` (also the default when omitted), database checks run
+normally and extracted shell checks are `SKIPPED` with a reason. With SSH enabled,
+the tool attempts additional Linux OS checks. SSH failure does not abort the
+database audit. Windows OS checks are not currently automated.
+
+SSH uses verified system host keys (or `target.ssh.known_hosts`) and rejects
+unknown hosts. Configure `key_filename` or `password`; no interactive password
+prompt is required. An optional `target.ssh.host` can differ from the database
+endpoint. Shells do not source login profiles, so configure required environment
+variables in the commands/environment. Shell results currently require manual
+review rather than assuming that empty stdout means compliance.
+
+### SQL Server setup
+
+SQL Server uses Microsoft's `mssql-python` driver and requires Python 3.10+.
+Install the unified project requirements in a virtual environment:
+
+```bash
+python3 -m venv /home/nox/Desktop/CIS-Compliance-Engine/.venv
+/home/nox/Desktop/CIS-Compliance-Engine/.venv/bin/python -m pip install -r /home/nox/Desktop/CIS-Compliance-Engine/requirements.txt
+```
+
+Linux may additionally require distribution-specific native libraries; consult
+Microsoft's `mssql-python` installation documentation. All Oracle and SQL Server
+Python dependencies are maintained together in `requirements.txt`.
+
+Configure the example at
+`/home/nox/Desktop/CIS-Compliance-Engine/config/sqlserver.example.yaml` with the
+target host, database and dedicated audit user. Set `CCE_SQLSERVER_PASSWORD` in
+your process environment; avoid committing passwords. Encryption is enabled and
+server certificates are verified by default. Then, from the project root:
+
+```bash
+/home/nox/Desktop/CIS-Compliance-Engine/.venv/bin/python -m src.main --config /home/nox/Desktop/CIS-Compliance-Engine/config/sqlserver.example.yaml
+```
+
+The Oracle equivalent is
+`/home/nox/Desktop/CIS-Compliance-Engine/config/oracle.example.yaml`; it accepts
+`CCE_ORACLE_PASSWORD`. Existing `connection.password` settings remain supported.
+Existing private configuration files are not modified by this change.
+
+### Evaluation and coverage
+
+SQL Server checks with explicit `Both value columns must show 0/1` audit wording
+and matching configuration-column aliases receive a narrowly inferred comparison.
+Other SELECT results are retained as `MANUAL` unless a reviewed expectation is
+configured. Only simple SELECTs are executed; batches, EXEC, writes and CTEs are
+left for manual review. This is a conservative guard, not a security sandbox:
+always use an appropriately restricted audit account and a trusted benchmark.
+
+For a control with exactly one SQL check, an optional rule-ID expectation can be
+set under `audit.expectations`. Supported SQL Server modes are `empty_rows`,
+`scalar_equal` and `columns_equal`. For example (verify against your benchmark):
+
+```yaml
+audit:
+  expectations:
+    "2.1":
+      mode: columns_equal
+      columns:
+        value_configured: 0
+        value_in_use: 0
+```
+
+SQL Server controls returning no rows for a column comparison require manual
+applicability review. Multi-query controls do not accept these overrides.
+Oracle retains its existing SQL empty-row evaluation behavior; improving its
+per-control interpretation is a separate follow-up, and SQL expectation overrides
+currently apply only to SQL Server.
+
+Reports distinguish `PASS`, `FAIL`, `ERROR`, `SKIPPED` and `MANUAL`. The score is
+`PASS / (PASS + FAIL)`; it is `N/A` when no controls are evaluated. Evaluated
+coverage is `(PASS + FAIL) / total extracted controls`. Always review coverage
+alongside the score: a high score is not evidence of complete benchmark coverage.
+SSH availability does not guarantee 100% coverage. The `reporting.format` option
+is still not implemented; reports produce both JSON and TXT.
+
+### Extracted rule cache
+
+Rules are extracted once and stored in the JSON file specified by
+`audit.rules_cache` (default `.cache/rules.json`, relative to the working directory).
+The same file can store multiple benchmarks. Cache entries are separated by the
+PDF's SHA-256 content hash, vendor and parser source hash. Changing PDF contents
+or parser code automatically triggers extraction again; moving an unchanged PDF
+does not. Missing, unreadable, malformed or incompatible cached entries are rebuilt.
+The PDF must still exist so its hash can be verified. Only rules are cached, not
+credentials or audit results; database checks execute on every run.
+
+Use `--refresh-rules` with the normal execution command to force fresh extraction,
+or set `audit.rules_cache: null` to disable caching. Removing the cache file also
+forces extraction. A cache write failure does not prevent the current audit.
+Cache files contain executable policies: keep them writable only by trusted users.
+Writes use atomic replacement; simultaneous writers may lose each other's cache
+entries, but a later cache miss simply rebuilds them.
+
+Run offline regression tests from the project root:
+
+```bash
+python3 -B -m unittest discover -s /home/nox/Desktop/CIS-Compliance-Engine/tests -v
+```
 
 ---
 
@@ -19,7 +123,8 @@ Unlike traditional compliance tools that rely on static, manually maintained tem
 
 ### 🧠 Intelligent PDF Parsing
 
-* **Dynamic Rule Extraction:** Directly ingests CIS Benchmark PDFs and automatically extracts Rule IDs, titles, descriptions, and audit procedures.
+* **Dynamic Rule Extraction:** Ingests CIS Benchmark PDFs and extracts Rule IDs, titles, audit text, and executable checks.
+* **Rule Cache:** Reuses extracted rules for unchanged documents; missing or invalid cache entries are rebuilt automatically.
 * **Smart Command Detection:** Uses heuristics to distinguish between SQL queries (`SELECT`, `WITH`) and operating-system commands (`grep`, `ls`, `opatch`, etc.).
 * **Multi-line Check Support:** Handles complex, multi-line audit procedures.
 * **Benchmark-Driven:** Audit logic is derived from the supplied CIS Benchmark PDF rather than hard-coded exclusively in the application.
@@ -27,7 +132,7 @@ Unlike traditional compliance tools that rely on static, manually maintained tem
 ### 🛡️ Enterprise-Ready Auditing
 
 * **Agentless Architecture:** No CCE agent or software installation is required on the target database/server.
-* **Native Connectivity:** Uses Oracle SQL*Net for database checks and SSH for operating-system checks.
+* **Native Connectivity:** Connects directly to Oracle or SQL Server; optional SSH adds Linux operating-system checks.
 * **Granular Reporting:** Generates JSON and text reports under the `reports/` directory.
 * **CLI Feedback:** Provides color-coded `PASS`, `FAIL`, `ERROR`, `SKIPPED`, and `MANUAL` results with progress information.
 * **Audit Traceability:** Each result is associated with its corresponding CIS control.
@@ -73,6 +178,7 @@ Currently supported:
 
 ```text
 Oracle Database 19c
+SQL Server 2017 (initial support; live connection not yet validated)
 ```
 
 ### 3. Reporter
@@ -287,19 +393,24 @@ reporting:
 
 | Parameter                        | Description                           |
 | -------------------------------- | ------------------------------------- |
-| `target.driver`                  | Database driver, currently `oracle`   |
+| `target.driver`                  | `oracle`, `sqlserver`, or `mssql`      |
 | `target.host`                    | Target database/server IP or hostname |
 | `target.connection.port`         | Oracle listener port, normally `1521` |
 | `target.connection.service_name` | Oracle service name                   |
 | `target.connection.user`         | Dedicated CCE audit account           |
 | `target.connection.password`     | Password of the audit account         |
+| `target.connection.password_env` | Environment variable containing the password (preferred; overrides password) |
+| `target.connection.database`     | SQL Server initial database, default `master` |
+| `target.connection.encrypt`      | SQL Server encryption, default `true` |
+| `target.connection.trust_server_certificate` | Skip certificate validation, default `false` |
 | `target.ssh.enabled`             | Enables SSH-based checks              |
 | `target.ssh.user`                | SSH account used for OS-level checks  |
 | `target.ssh.port`                | SSH port                              |
 | `audit.benchmark_pdf`            | CIS Benchmark PDF                     |
-| `audit.rules_cache`              | Extracted rule cache                  |
+| `audit.rules_cache`              | JSON cache path; defaults to `.cache/rules.json`; `null` disables it |
+| `audit.expectations`             | Reviewed SQL Server evaluation overrides keyed by rule ID |
 | `reporting.output_dir`           | Report directory                      |
-| `reporting.format`               | Report format                         |
+| `reporting.format`               | Reserved setting; currently both JSON and TXT are generated |
 
 ---
 
@@ -307,9 +418,9 @@ reporting:
 
 ## Prerequisites
 
-* Python 3.9 or higher
-* Oracle Database 19c
-* Oracle Python driver / Oracle connectivity dependencies
+* Python 3.10 or higher
+* Oracle Database 19c or SQL Server 2017
+* Project Python dependencies and any required native connectivity libraries
 * Network access to the target database
 * SSH access if OS-level checks are required
 
@@ -323,7 +434,9 @@ cd CIS-Compliance-Engine
 ## 2. Install Dependencies
 
 ```bash
-pip install -r requirements.txt --break-system-packages
+python3 -m venv /home/nox/Desktop/CIS-Compliance-Engine/.venv
+source /home/nox/Desktop/CIS-Compliance-Engine/.venv/bin/activate
+python -m pip install -r /home/nox/Desktop/CIS-Compliance-Engine/requirements.txt
 ```
 
 ## 3. Configure the Target
@@ -334,12 +447,15 @@ Create:
 config/config.yaml
 ```
 
-and configure the Oracle connection and, if required, SSH access.
+Alternatively, copy the Oracle or SQL Server example to a `*.local.yaml` file
+under `/home/nox/Desktop/CIS-Compliance-Engine/config/` and configure the connection.
+Local configuration files are ignored by Git. Use environment-variable passwords
+and optional SSH access; do not commit credentials.
 
 ## 4. Run the Audit
 
 ```bash
-python3 -m src.main --config config/config.yaml
+python -m src.main --config /home/nox/Desktop/CIS-Compliance-Engine/config/oracle.local.yaml
 ```
 
 ---
@@ -385,6 +501,9 @@ If they execute successfully, CCE can proceed with the relevant automated checks
 # 📊 Sample Output
 
 CCE provides a tabular summary of the compliance state:
+
+The TITLE column is at least 100 characters wide and expands to the longest
+cleaned title so RESULT stays aligned. Narrow terminals may wrap the output.
 
 ```text
 NO.  TIME      TYPE    ID       STATUS   TITLE                                                        RESULT
@@ -445,12 +564,14 @@ Conceptually:
 
 ```text
 Compliance Score =
-    Passed Automated Controls
+    Passed Evaluated Controls
     --------------------------
-    Total Automated Controls
+    Passed + Failed Controls
 ```
 
-Manual controls are excluded from the automated score because they require human verification.
+Manual, skipped and error outcomes are excluded from the score. If no controls
+have PASS/FAIL outcomes, the score is `N/A`. Evaluated coverage is
+`(PASS + FAIL) / total extracted controls`; inspect it alongside the score.
 
 ---
 
@@ -462,7 +583,7 @@ Reports are generated under:
 reports/
 ```
 
-Depending on the configured output format, CCE produces:
+CCE currently produces both formats regardless of `reporting.format`:
 
 ```text
 JSON
@@ -479,6 +600,7 @@ Current primary target:
 
 ```text
 CIS Oracle Database 19c Benchmark
+CIS Microsoft SQL Server 2017 Benchmark v1.3.0 (initial support)
 ```
 
 The benchmark PDF supplied to CCE determines the controls and audit procedures that are evaluated.

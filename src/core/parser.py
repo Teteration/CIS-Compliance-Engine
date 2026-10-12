@@ -6,11 +6,17 @@ import sys
 logger = logging.getLogger(__name__)
 
 class CISPdfParser:
-    def __init__(self, pdf_path):
+    def __init__(self, pdf_path, vendor='oracle'):
         self.pdf_path = pdf_path
+        self.vendor = vendor
 
     def parse(self):
         full_text = self._extract_text()
+        header = full_text[:10000].lower()
+        if self.vendor == 'oracle' and 'sql server' in header and 'benchmark' in header:
+            raise ValueError('SQL Server benchmark cannot be used with the Oracle driver')
+        if self.vendor in ('sqlserver', 'mssql') and 'oracle database' in header and 'benchmark' in header:
+            raise ValueError('Oracle benchmark cannot be used with the SQL Server driver')
         logger.info("\nProcessing extracted text...")
         full_text = self._fix_ocr(full_text)
         return self._extract_rules(full_text)
@@ -55,6 +61,7 @@ class CISPdfParser:
         lines = text.split('\n')
         current_rule = None
         audit_buffer = ""
+        in_audit = False
 
         for line in lines:
             line = line.strip()
@@ -78,26 +85,29 @@ class CISPdfParser:
                         rules_map[r_id] = current_rule
                     else:
                         # If we already saw it (likely TOC), but now we found checks, Update it!
-                        if current_rule['checks']:
+                        if current_rule['audit_text']:
                             rules_map[r_id] = current_rule
                 
                 # 2. Start New Rule
                 current_rule = {'id': match.group(1), 'title': match.group(3), 'checks': []}
                 audit_buffer = ""
+                in_audit = False
                 continue
 
             if line.startswith("Audit:"):
-                audit_buffer = line + "\n"
-            elif any(line.startswith(x) for x in ["Remediation:", "Impact:"]):
-                continue
-            elif current_rule:
-                audit_buffer += line + " "
+                in_audit = True
+                audit_buffer = line[len('Audit:'):] + "\n"
+            elif any(line.startswith(x) for x in ["Remediation:", "Impact:", "Default Value:", "References:", "CIS Controls:"]):
+                in_audit = False
+            elif current_rule and in_audit:
+                if not re.match(r'^Page\s+\d+', line):
+                    audit_buffer += line + "\n"
 
         # Save Last Rule
         if current_rule:
             self._process_checks(current_rule, audit_buffer, sql_pattern)
             r_id = current_rule['id']
-            if current_rule['checks'] or r_id not in rules_map:
+            if current_rule['audit_text'] or r_id not in rules_map:
                 rules_map[r_id] = current_rule
                 
         # Return list sorted by ID
@@ -107,19 +117,24 @@ class CISPdfParser:
         return sorted(rules_map.values(), key=lambda x: parse_id(x['id']))
 
     def _process_checks(self, rule, text, sql_regex):
+        rule['audit_text'] = text.strip()
         sqls = sql_regex.findall(text)
         for q in sqls:
             if isinstance(q, tuple): q = q[0]
             clean_q = q.strip()
             if clean_q.upper().startswith("SELECT") or clean_q.upper().startswith("WITH"):
-                rule['checks'].append({'type': 'sql', 'cmd': clean_q})
+                check = {'type': 'sql', 'cmd': clean_q}
+                if self.vendor in ('sqlserver', 'mssql'):
+                    # Narrow inference only: configuration values explicitly specified by audit prose.
+                    expected = re.search(r'Both\s+value\s+columns\s+must\s+show\s+([01])\b', text, re.I)
+                    if expected and 'sys.configurations' in clean_q.lower() and all(c in clean_q.lower() for c in ('value_configured', 'value_in_use')):
+                        value = int(expected.group(1))
+                        check['expectation'] = {'mode': 'columns_equal', 'columns': {'value_configured': value, 'value_in_use': value}}
+                rule['checks'].append(check)
 
-        # --- FIX: Split by ANY whitespace (newline or space) ---
-        # This fixes the issue where "Audit:\ngrep" was seen as one word
-        words = text.split() 
-        for i, word in enumerate(words):
-            if word in ['grep', 'find', 'ls', 'opatch']:
-                cmd = " ".join(words[i:i+15]).replace("Windows environment:", "")
-                if "%ORACLE_HOME%" not in cmd and "find /I" not in cmd:
+        # Preserve command lines rather than appending arbitrary prose words.
+        for line in text.splitlines():
+            cmd = re.sub(r'^\$\s+', '', line.strip())
+            if re.match(r'^(grep|find|ls|opatch)\s+', cmd):
+                if '%ORACLE_HOME%' not in cmd and not cmd.startswith('find /I'):
                     rule['checks'].append({'type': 'shell', 'cmd': cmd})
-                break

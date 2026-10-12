@@ -4,3 +4,4 @@ oracledb>=4.0.1
 paramiko>=5.0.0
 pdfplumber>=0.11.10
 PyYAML>=6.0.3
+mssql-python>=1.0.0

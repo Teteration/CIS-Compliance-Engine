@@ -14,3 +14,6 @@ reports/
 *.pdf
 *.json
 *.log
+.cache/
+.venv/
+config/*.local.yaml

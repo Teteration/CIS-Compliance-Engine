@@ -20,9 +20,14 @@ class Reporter:
         
         passed = sum(1 for r in results if r['result'] == 'PASS')
         failed = sum(1 for r in results if r['result'] == 'FAIL')
+        skipped = sum(1 for r in results if r['result'] == 'SKIPPED')
+        errors = sum(1 for r in results if r['result'] == 'ERROR')
+        evaluated = passed + failed
+        coverage = (evaluated / total_rules * 100) if total_rules else 0
         
-        # Score based only on AUTOMATED checks
-        score = (passed / automated * 100) if automated > 0 else 0
+        # Unknown, skipped and error outcomes are not compliance verdicts.
+        score = (passed / evaluated * 100) if evaluated else None
+        score_label = f'{score:.2f}%' if score is not None else 'N/A'
 
         # --- CLEANER TERMINAL SUMMARY ---
         print("\n" + "="*60)
@@ -32,24 +37,31 @@ class Reporter:
         print(f"   Total Checklist: {total_rules}")
         print("-" * 30)
         print(f"   Automated:       {automated}")
-        print(f"   Manual (Skipped):{manual}")
+        print(f"   Manual review:   {manual}")
         print("-" * 30)
         print(f"   Passed:          {passed}")
         print(f"   Failed:          {failed}")
+        print(f"   Skipped:         {skipped}")
+        print(f"   Errors:          {errors}")
+        print(f"   Evaluated coverage: {coverage:.2f}%")
         print("="*60)
-        print(f"   COMPLIANCE SCORE: {score:.2f}% (Automated Only)")
+        print(f"   COMPLIANCE SCORE: {score_label} (Evaluated Only)")
         print("="*60 + "\n")
 
         summary = {
             "target": target_info,
             "timestamp": timestamp,
-            "score": f"{score:.2f}%",
+            "score": score_label,
+            "coverage": f"{coverage:.2f}%",
             "stats": {
                 "total": total_rules,
                 "automated": automated,
                 "manual": manual,
                 "passed": passed,
-                "failed": failed
+                "failed": failed,
+                "skipped": skipped,
+                "errors": errors,
+                "evaluated": evaluated
             }
         }
 
@@ -65,7 +77,8 @@ class Reporter:
         with open(txt_path, 'w') as f:
             f.write(f"CIS AUDIT REPORT - {timestamp}\n")
             f.write(f"Target: {target_info}\n")
-            f.write(f"Score: {score:.2f}% (of {automated} automated checks)\n")
+            f.write(f"Score: {score_label} (of {evaluated} evaluated controls)\n")
+            f.write(f"Evaluated coverage: {coverage:.2f}%\n")
             f.write("="*60 + "\n")
             
             for r in results:
@@ -74,10 +87,12 @@ class Reporter:
                 
                 if r['result'] == 'MANUAL':
                     f.write("   Note: Manual verification required.\n")
+                    if r.get('audit_text'):
+                        f.write(f"   Audit procedure: {r['audit_text']}\n")
                 
                 for c in r['checks']:
                     # Only write command details if it Failed or Error
-                    if r['result'] in ['FAIL', 'ERROR']:
+                    if r['result'] in ['FAIL', 'ERROR', 'SKIPPED', 'MANUAL']:
                         f.write(f"   Cmd: {c['cmd'][:100]}...\n")
                         f.write(f"   Out: {str(c['output']).strip()}\n")
                 f.write("-" * 40 + "\n")
