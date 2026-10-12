@@ -5,6 +5,7 @@ target:
     port: 1521
     service_name: ORCLPDB1
     user: cce_audit
+    mode: normal  # Use sysdba with user: sys for administrative test connections.
     password_env: CCE_ORACLE_PASSWORD
   ssh:
     enabled: false

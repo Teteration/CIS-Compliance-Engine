@@ -16,13 +16,21 @@ class OracleDriver(AuditDriver):
         # 1. Connect to Database
         db_conf = self.config.get('connection', {})
         dsn = f"{self.config['host']}:{db_conf['port']}/{db_conf['service_name']}"
+        mode = str(db_conf.get('mode', 'normal')).strip().lower()
+        if mode not in ('normal', 'sysdba'):
+            raise ValueError('Oracle connection.mode must be normal or sysdba')
+        user = db_conf['user']
+        if ' as ' in user.lower():
+            raise ValueError('Set Oracle connection.user to the username only; use connection.mode: sysdba for SYSDBA access')
+        options = {'mode': oracledb.AUTH_MODE_SYSDBA} if mode == 'sysdba' else {}
         
         logger.info(f"Connecting to Oracle DB: {dsn}")
         try:
             self.conn = oracledb.connect(
-                user=db_conf['user'],
+                user=user,
                 password=os.environ[db_conf['password_env']] if db_conf.get('password_env') else db_conf['password'],
-                dsn=dsn
+                dsn=dsn,
+                **options
             )
             self.cursor = self.conn.cursor()
         except oracledb.Error as e:

@@ -14,6 +14,28 @@ from src.main import aggregate_status, get_driver, run_audit, main
 
 
 class AuditTests(unittest.TestCase):
+    def test_only_status_column_is_colored(self):
+        for status, color in [('PASS', '\x1b[32m'), ('FAIL', '\x1b[31m'),
+                              ('ERROR', '\x1b[31m'), ('MANUAL', '\x1b[33m'),
+                              ('SKIPPED', '\x1b[33m')]:
+            with self.subTest(status=status), patch('src.main.Reporter'):
+                rules = [{'id': '1.1', 'title': 'Ensure test',
+                          'checks': [{'type': 'sql', 'cmd': 'SELECT 1'}]}]
+                driver = Mock()
+                driver.execute_policy.return_value = {'status': status, 'output': 'test result'}
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    run_audit({'audit': {}, 'target': {'host': 'offline'},
+                               'reporting': {'output_dir': 'unused'}}, rules, driver)
+                row = next(line for line in output.getvalue().splitlines() if line.startswith('1 '))
+                self.assertEqual(re.findall(r'\x1b\[[0-9;]*m', row), [color, '\x1b[0m'])
+                prefix, colored = row.split(color)
+                status_text, suffix = colored.split('\x1b[0m')
+                self.assertEqual(status_text, f'{status:<7}')
+                self.assertIn('UNKNOWN', prefix)
+                self.assertTrue(suffix.startswith(' Ensure test'))
+                self.assertTrue(suffix.endswith('test result'))
+
     def test_long_titles_keep_result_column_aligned(self):
         for title_length in (80, 160):
             with self.subTest(title_length=title_length), tempfile.TemporaryDirectory() as tmp:
@@ -31,9 +53,40 @@ class AuditTests(unittest.TestCase):
                 header = next(line for line in lines if line.startswith('NO.'))
                 rows = [line for line in lines if 'RESULT_MARKER' in line]
                 self.assertEqual(len(rows), 2)
+                self.assertEqual(header.index('RESULT') - header.index('TITLE'),
+                                 min(100, max(map(len, titles))) + 4)
                 for row, title in zip(rows, titles):
-                    self.assertIn(title, row)
+                    self.assertIn(title[:100], row)
                     self.assertEqual(row.index('RESULT_MARKER'), header.index('RESULT'))
+
+    def test_terminal_limits_preserve_full_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            title = 'Ensure ' + 'x' * 160
+            rules = [{'id': '1.1', 'title': title,
+                      'checks': [{'type': 'sql', 'cmd': 'SELECT 1'}]}]
+            result = 'DPY diagnostic: ' + 'long output value; ' * 20 + 'END_OF_RESULT'
+            driver = Mock()
+            driver.execute_policy.return_value = {'status': 'ERROR', 'output': result}
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), patch('src.main.Reporter') as reporter:
+                run_audit({'audit': {}, 'target': {'host': 'offline'},
+                           'reporting': {'output_dir': tmp}}, rules, driver)
+            lines = re.sub(r'\x1b\[[0-9;]*m', '', output.getvalue()).splitlines()
+            header = next(line for line in lines if line.startswith('NO.'))
+            offset = header.index('RESULT')
+            start = next(idx for idx, line in enumerate(lines) if line.startswith('1 '))
+            rows = []
+            for line in lines[start:]:
+                if not line:
+                    break
+                rows.append(line)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][offset:], result[:50])
+            self.assertEqual(rows[0][offset - 4:offset], ' ' * 4)
+            self.assertEqual(rows[0][header.index('TITLE'):offset - 4], title[:100])
+            report_rules = reporter.return_value.generate.call_args.args[0]
+            self.assertEqual(report_rules[0]['title'], title)
+            self.assertEqual(report_rules[0]['checks'][0]['output'], result)
 
     def test_statuses(self):
         for status in ('PASS', 'FAIL', 'ERROR', 'SKIPPED', 'MANUAL'):
@@ -49,10 +102,31 @@ class AuditTests(unittest.TestCase):
             'port': 1521, 'service_name': 'test', 'user': 'audit', 'password': 'test'}})
         with patch('src.drivers.oracle.oracledb.connect') as connect, patch('paramiko.SSHClient') as ssh:
             driver.connect()
-            connect.assert_called_once()
+            connect.assert_called_once_with(user='audit', password='test', dsn='offline:1521/test')
             ssh.assert_not_called()
             self.assertEqual(driver.execute_check('shell', 'grep test file')['status'], 'SKIPPED')
             driver.disconnect()
+
+    def test_oracle_sysdba_connection(self):
+        from src.drivers.oracle import oracledb
+        driver = OracleDriver({'host': 'offline', 'connection': {
+            'port': 1521, 'service_name': 'test', 'user': 'sys',
+            'mode': 'SYSDBA', 'password_env': 'CCE_ORACLE_PASSWORD'}})
+        with patch.dict('os.environ', {'CCE_ORACLE_PASSWORD': 'test'}), patch('src.drivers.oracle.oracledb.connect') as connect:
+            driver.connect()
+            connect.assert_called_once_with(user='sys', password='test',
+                                            dsn='offline:1521/test', mode=oracledb.AUTH_MODE_SYSDBA)
+            driver.disconnect()
+
+    def test_oracle_invalid_auth_configuration(self):
+        for settings in ({'mode': 'invalid', 'user': 'sys'},
+                         {'mode': 'normal', 'user': 'sys as sysdba'}):
+            with self.subTest(settings=settings), patch('src.drivers.oracle.oracledb.connect') as connect:
+                driver = OracleDriver({'host': 'offline', 'connection': {
+                    'port': 1521, 'service_name': 'test', 'password': 'test', **settings}})
+                with self.assertRaises(ValueError):
+                    driver.connect()
+                connect.assert_not_called()
 
     def test_ssh_failure_does_not_break_database(self):
         driver = SQLServerDriver({'host': 'offline', 'ssh': {'enabled': True, 'user': 'audit'}})
@@ -89,6 +163,110 @@ SELECT secret FROM remediation;
         self.assertNotIn('remediation', rule['checks'][0]['cmd'])
         self.assertEqual(rule['checks'][0]['expectation']['columns']['value_in_use'], 0)
 
+    def test_multiline_rule_titles(self):
+        # Wrapped titles still work independently of SQL extraction.
+        text = '''6.2 Ensure 'CLR Assembly Permission Set' is set to
+'SAFE_ACCESS' for All CLR Assemblies (Automated)
+Profile Applicability:
+Level 1 - Database Engine
+Description:
+Description must not become part of the title.
+Audit:
+SELECT name FROM sys.assemblies;
+Remediation:
+Review assemblies.
+7.1 Ensure encryption
+uses a supported
+algorithm (Manual)
+Description:
+Another description.
+Audit:
+Review manually.
+'''
+        rules = CISPdfParser('unused', 'sqlserver')._extract_rules(text)
+        self.assertEqual(rules[0]['title'], "Ensure 'CLR Assembly Permission Set' is set to 'SAFE_ACCESS' for All CLR Assemblies (Automated)")
+        self.assertEqual(len(rules[0]['checks']), 1)
+        self.assertEqual(rules[1]['title'], 'Ensure encryption uses a supported algorithm (Manual)')
+
+    def test_untagged_title_stops_at_section_heading(self):
+        text = '1.1 Ensure setting\nDescription:\nNot title text.\nAudit:\nSELECT 1;\n'
+        rule = CISPdfParser('unused')._extract_rules(text)[0]
+        self.assertEqual(rule['title'], 'Ensure setting')
+        self.assertEqual(len(rule['checks']), 1)
+
+    def test_audit_prose_with_is_not_sql(self):
+        text = '''2.1.4 Ensure setting (Automated)
+Audit:
+SELECT value FROM v$parameter WHERE name = 'example';
+To comply
+with this recommendation, the output of this command should be NULL.
+Note:
+Review the evidence.
+Remediation:
+Review manually.
+'''
+        rule = CISPdfParser('unused')._extract_rules(text)[0]
+        self.assertEqual([check['cmd'] for check in rule['checks']],
+                         ["SELECT value FROM v$parameter WHERE name = 'example'"])
+        self.assertIn('with this recommendation', rule['audit_text'])
+
+    def test_pdf_footer_removed_from_multiline_sql(self):
+        text = '''3.3 Ensure setting (Automated)
+Audit:
+WITH permitted (name) AS (
+SELECT name FROM CDB_PROFILES
+Internal Only - General
+WHERE profile = 'DEFAULT'
+), additional AS (SELECT name FROM CDB_USERS)
+SELECT * FROM permitted
+  Internal Only - General
+UNION SELECT * FROM additional;
+Remediation:
+Review manually.
+'''
+        for vendor in ('oracle', 'sqlserver'):
+            with self.subTest(vendor=vendor):
+                rule = CISPdfParser('unused', vendor)._extract_rules(text)[0]
+                self.assertEqual(len(rule['checks']), 1)
+                self.assertTrue(rule['checks'][0]['cmd'].startswith('WITH permitted'))
+                self.assertIn('UNION SELECT * FROM additional', rule['checks'][0]['cmd'])
+                self.assertNotIn('Internal Only - General', rule['audit_text'])
+                self.assertNotIn('Internal Only - General', rule['checks'][0]['cmd'])
+
+    def test_sql_keywords_in_prose_do_not_start_queries(self):
+        text = '''1.1 Ensure setting (Automated)
+Audit:
+Review with this recommendation and SELECT the relevant setting;
+SELECT 'Internal Only - General' AS label FROM dual;
+Remediation:
+Review manually.
+'''
+        rule = CISPdfParser('unused')._extract_rules(text)[0]
+        self.assertEqual([check['cmd'] for check in rule['checks']],
+                         ["SELECT 'Internal Only - General' AS label FROM dual"])
+
+    def test_cis_mapping_rows_are_not_benchmark_rules(self):
+        text = '''6.1 Ensure first setting (Manual)
+Profile Applicability:
+Level 1
+Audit:
+Review manually.
+CIS Controls:
+18.2 Ensure Explicit Error Checking is Performed
+v7 For in-house developed software, ensure explicit checking.
+9.2 Ensure Only Approved Ports
+v7 Are Running
+6.2 Ensure 'CLR Assembly Permission Set' is set to
+'SAFE_ACCESS' for All CLR Assemblies (Automated)
+Profile Applicability:
+Level 1
+Audit:
+SELECT name FROM sys.assemblies;
+'''
+        rules = CISPdfParser('unused', 'sqlserver')._extract_rules(text)
+        self.assertEqual([rule['id'] for rule in rules], ['6.1', '6.2'])
+        self.assertIn("'SAFE_ACCESS' for All CLR Assemblies", rules[1]['title'])
+
     def test_sqlserver_values_and_unknown_expectation(self):
         driver = SQLServerDriver({}); driver.cursor = Mock()
         driver.cursor.description = [('name',), ('value_configured',), ('value_in_use',)]
@@ -106,6 +284,55 @@ SELECT secret FROM remediation;
         for sql in ('EXEC sp_configure', 'SELECT 1; DROP TABLE x', 'SELECT * INTO x FROM y'):
             self.assertEqual(driver.execute_check('sql', sql)['status'], 'MANUAL')
         driver.cursor.execute.assert_not_called()
+
+    def test_sqlserver_report_error_regressions(self):
+        for variable in ('getValue', 'NumErrorLogs'):
+            with self.subTest(variable=variable):
+                text = (f'2.12 Ensure registry setting (Automated)\nAudit:\n'
+                        f'DECLARE @{variable} INT;\n'
+                        f'EXEC master.sys.xp_instance_regread @{variable} OUTPUT;\n'
+                        f'SELECT @{variable};\nRemediation:\nReview manually.\n')
+                rule = CISPdfParser('unused', 'sqlserver')._extract_rules(text)[0]
+                self.assertEqual(len(rule['checks']), 1)
+                check = rule['checks'][0]
+                self.assertEqual(check['type'], 'manual')
+                self.assertIn('DECLARE', check['cmd'])
+                self.assertIn('EXEC', check['cmd'])
+                driver = SQLServerDriver({}); driver.cursor = Mock()
+                self.assertEqual(driver.execute_policy(check)['status'], 'MANUAL')
+                self.assertEqual(driver.execute_check('sql', f'SELECT @{variable}')['status'], 'MANUAL')
+                driver.cursor.execute.assert_not_called()
+
+    def test_sqlserver_proxy_check_uses_msdb_without_switching_database(self):
+        text = '''3.11 Ensure public cannot use proxies (Automated)
+Audit:
+USE [msdb]
+GO
+SELECT sp.name AS proxyname
+FROM dbo.sysproxylogin spl
+JOIN sys.database_principals dp
+ON dp.sid = spl.sid
+JOIN sysproxies sp
+ON sp.proxy_id = spl.proxy_id
+WHERE principal_id = USER_ID('public');
+GO
+This query should not return any rows.
+Remediation:
+Review manually.
+'''
+        rule = CISPdfParser('unused', 'sqlserver')._extract_rules(text)[0]
+        check = rule['checks'][0]
+        self.assertIn('msdb.dbo.sysproxylogin', check['cmd'])
+        self.assertIn('msdb.sys.database_principals', check['cmd'])
+        self.assertIn('msdb.dbo.sysproxies', check['cmd'])
+        self.assertNotIn('USER_ID', check['cmd'])
+        driver = SQLServerDriver({}); driver.cursor = Mock()
+        driver.cursor.description = [('proxyname',)]
+        for rows, status in (([], 'PASS'), ([('proxy',)], 'FAIL')):
+            driver.cursor.fetchall.return_value = rows
+            self.assertEqual(driver.execute_policy(check)['status'], status)
+        self.assertEqual(driver.cursor.execute.call_count, 2)
+        driver.cursor.execute.assert_called_with(check['cmd'])
 
     def test_shell_errors_are_not_passed(self):
         driver = SQLServerDriver({}); driver.ssh = Mock()

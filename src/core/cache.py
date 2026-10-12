@@ -41,10 +41,12 @@ class RulesCache:
 
     def load_or_parse(self, parser, refresh=False):
         from . import parser as parser_module
+        from . import sqlserver_checks
         identity = {
             'pdf_sha256': self._digest(parser.pdf_path),
             'vendor': 'sqlserver' if parser.vendor == 'mssql' else parser.vendor,
             'parser_sha256': self._digest(parser_module.__file__),
+            'sqlserver_checks_sha256': self._digest(sqlserver_checks.__file__),
         }
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         entries = {}

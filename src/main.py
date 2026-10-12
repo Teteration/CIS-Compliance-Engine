@@ -53,11 +53,10 @@ def aggregate_status(checks):
 def clean_output(raw):
     """Clean up the DB output for the log line"""
     s = str(raw).replace("\n", " ").strip()
-    if "DPY" in s: return "Error"
     if "No rows" in s: return "Empty"
     # Convert [('VALUE',)] to just VALUE
     s = s.replace("[('", "").replace("',)]", "").replace("')]", "")
-    return s[:50] # Truncate if too long
+    return s[:50]
 
 def clean_title(title):
     t = re.sub(r'\.+\s*\d+$', '', title)
@@ -109,9 +108,16 @@ def main():
 def run_audit(cfg, rules, driver):
     # 3. Execution
     audit_results = []
-    # Use one shared width for the header and every row, without truncating titles.
-    title_width = max(100, max((len(clean_title(rule['title'])) for rule in rules), default=0))
-    header = f"{'NO.':<4} {'TIME':<9} {'TYPE':<7} {'ID':<8} {'STATUS':<7} {'TITLE':<{title_width}} {'RESULT'}"
+    # Keep terminal summaries compact; full titles and outputs remain in the report.
+    title_width = min(100, max(len('TITLE'), max((len(clean_title(rule['title'])) for rule in rules), default=0)))
+    def format_row(number, time, kind, rule_id, status, title, result, color=''):
+        status_text = f'{status:<7}'
+        if color:
+            status_text = f'{color}{status_text}{Style.RESET_ALL}'
+        return (f'{number:<4} {time:<9} {kind:<7} {rule_id:<8} '
+                f'{status_text} {title[:title_width]:<{title_width}}    {result}')
+
+    header = format_row('NO.', 'TIME', 'TYPE', 'ID', 'STATUS', 'TITLE', 'RESULT')
     separator = '=' * (len(header) - len('RESULT') + 50)
     print("\n" + separator)
     print(header)
@@ -122,13 +128,19 @@ def run_audit(cfg, rules, driver):
         rule_checks = []
         found_result = "None"
         clean_t = clean_title(rule['title'])
+        assessment = rule.get('assessment_type', 'UNKNOWN')
+        check_type = {'AUTOMATED': 'AUTO', 'MANUAL': 'MANUAL'}.get(assessment, 'UNKNOWN')
         
         # Determine Type
-        if not rule.get('checks'):
+        if assessment == 'MANUAL':
+            rule_result = 'MANUAL'
+            found_result = 'Manual assessment specified by benchmark'
+        elif not rule.get('checks'):
             rule_result = "MANUAL"
-            check_type = "MANUAL"
+            if assessment == 'AUTOMATED':
+                rule_result = 'SKIPPED'
+                found_result = 'Unsupported: no executable check extracted'
         else:
-            check_type = "AUTO"
             for check in rule['checks']:
                 check = dict(check)
                 overrides = cfg['audit'].get('expectations', {}).get(rule['id'])
@@ -140,6 +152,8 @@ def run_audit(cfg, rules, driver):
                         res = driver.execute_policy(check)
                 else:
                     res = driver.execute_policy(check)
+                if assessment == 'AUTOMATED' and res['status'] == 'MANUAL':
+                    res = dict(res, status='SKIPPED', output='Unsupported automatic assessment: ' + str(res['output']))
                 
                 check_record = {
                     'cmd': check['cmd'],
@@ -160,16 +174,12 @@ def run_audit(cfg, rules, driver):
         else: color = Fore.GREEN
         
         # Format: [NO] [TIME] [TYPE] [ID] [STATUS] [TITLE] [RESULT]
-        print(f"{Style.DIM}{idx:<4} {get_time():<9}{Style.RESET_ALL} "
-              f"{check_type:<7} "
-              f"{rule['id']:<8} "
-              f"{color}{rule_result:<7}{Style.RESET_ALL} "
-              f"{clean_t:<{title_width}} "
-              f"{found_result}")
+        print(format_row(idx, get_time(), check_type, rule['id'], rule_result, clean_t, found_result, color))
 
         audit_results.append({
             "id": rule['id'],
             "title": clean_t,
+            "assessment_type": assessment,
             "result": rule_result,
             "audit_text": rule.get('audit_text', ''),
             "checks": rule_checks

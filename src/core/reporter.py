@@ -16,7 +16,9 @@ class Reporter:
         # Stats Calculation
         total_rules = len(results)
         manual = sum(1 for r in results if r['result'] == 'MANUAL')
-        automated = total_rules - manual
+        automated = sum(r.get('assessment_type') == 'AUTOMATED' for r in results)
+        declared_manual = sum(r.get('assessment_type') == 'MANUAL' for r in results)
+        unknown_type = total_rules - automated - declared_manual
         
         passed = sum(1 for r in results if r['result'] == 'PASS')
         failed = sum(1 for r in results if r['result'] == 'FAIL')
@@ -24,6 +26,8 @@ class Reporter:
         errors = sum(1 for r in results if r['result'] == 'ERROR')
         evaluated = passed + failed
         coverage = (evaluated / total_rules * 100) if total_rules else 0
+        auto_evaluated = sum(r.get('assessment_type') == 'AUTOMATED' and r['result'] in ('PASS', 'FAIL') for r in results)
+        completion = f'{auto_evaluated / automated * 100:.2f}%' if automated else 'N/A'
         
         # Unknown, skipped and error outcomes are not compliance verdicts.
         score = (passed / evaluated * 100) if evaluated else None
@@ -37,6 +41,8 @@ class Reporter:
         print(f"   Total Checklist: {total_rules}")
         print("-" * 30)
         print(f"   Automated:       {automated}")
+        print(f"   Source manual:   {declared_manual}; unknown type: {unknown_type}")
+        print(f"   Automation completion: {completion} (not parser accuracy)")
         print(f"   Manual review:   {manual}")
         print("-" * 30)
         print(f"   Passed:          {passed}")
@@ -53,9 +59,12 @@ class Reporter:
             "timestamp": timestamp,
             "score": score_label,
             "coverage": f"{coverage:.2f}%",
+            "automation_completion": completion,
             "stats": {
                 "total": total_rules,
                 "automated": automated,
+                "declared_manual": declared_manual,
+                "unknown_type": unknown_type,
                 "manual": manual,
                 "passed": passed,
                 "failed": failed,

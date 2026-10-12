@@ -2,10 +2,68 @@
 
 **CIS Compliance Engine (CCE)** is an automated, agentless security auditing framework designed to validate IT infrastructure against **Center for Internet Security (CIS) Benchmarks**.
 
-Unlike traditional compliance tools that rely on static, manually maintained templates, CCE dynamically parses official CIS Benchmark PDF documents and converts their audit procedures into executable audit policies.
+CCE extracts candidate audit checks from user-supplied CIS Benchmark PDFs and
+executes supported checks through database-specific drivers. Extraction is
+heuristic: it is not a guarantee of complete coverage or correct interpretation
+of every recommendation.
 
-> **Current Status:** v1.0.0 codebase with initial SQL Server support; live SQL Server validation pending
+> **Current Status:** Experimental Oracle and SQL Server auditing; limited live testing, not a validated universal CIS assessment engine
 > **Current Focus:** Oracle Database 19c and initial SQL Server support
+
+## Project purpose and contribution direction
+
+The goal is a free, community-developed bridge between security guidance and
+reviewable, tested assessment rules—not another implementation of every existing
+scanner. These are intended differentiators, not claims of superiority over
+CIS-CAT or OpenSCAP.
+
+### Available today
+
+- Direct Oracle and SQL Server connections, independent of optional Linux SSH.
+- User-supplied PDF extraction with source-sensitive rule caching.
+- Inspectable extracted commands, audit text and per-check evidence in reports.
+- Explicit execution errors and incomplete assessments rather than treating every
+  successful query as proof of compliance. This remains an area under improvement.
+- Local execution without an AI service or SecureSuite API dependency.
+
+### Proposed roadmap — not implemented
+
+- A vendor-neutral rule representation with source references, applicability,
+  required privileges, database/OS scope and explicit result expectations.
+- Optional AI-assisted rule authoring, followed by deterministic validation,
+  independent test fixtures and human approval before execution.
+- OpenSCAP export/execution for compatible content; retain specialized database
+  backends where they are needed. XCCDF alone does not implement a check: the
+  selected OVAL or script engine must support its collection and evaluation logic.
+- Separate source assessment type, implementation support and runtime result.
+  Measure automation support, completion and independently tested accuracy
+  separately; do not advertise an unmeasured 95% or 100% accuracy claim.
+- Reuse existing appropriately licensed assessment content before generating new
+  content, with support for organizational policies beyond CIS documents.
+
+### Content rights and open-source readiness
+
+Engine source code and imported benchmark content have separate licensing needs.
+No tracked LICENSE file was found when this section was added; an explicit code
+license must be selected before presenting the repository as licensed open source.
+Do not assume free download permits unrestricted republication, commercial use,
+AI-service upload or distribution of generated rule packs. Review the terms of
+the specific document/version and any membership agreement before those actions.
+Use original synthetic examples in public tests where content rights are unclear.
+The tool is not CIS-certified and does not claim CIS endorsement.
+
+As checked on October 12, 2026, CIS's terms index links free Benchmark PDFs to
+CC BY-NC-SA 4.0, while membership resources have separate agreements. This is
+not a blanket determination of the license of every historical PDF or derivative.
+SecureSuite provides structured content where available; OpenSCAP provides an
+assessment engine. Both can complement this project's proposed workflow.
+
+Official references (accessed October 12, 2026):
+
+- CIS terms: <https://www.cisecurity.org/terms-and-conditions-table-of-contents>
+- SecureSuite content formats: <https://ssapi.docs.cisecurity.org/en/stable/Benchmarks/>
+- OpenSCAP engines: <https://www.open-scap.org/features/scap-components/>
+- OpenSCAP execution and SCE: <https://static.open-scap.org/openscap-1.4.1/oscap_user_manual.html>
 
 ## Direct database access and optional OS access
 
@@ -51,13 +109,21 @@ The Oracle equivalent is
 `CCE_ORACLE_PASSWORD`. Existing `connection.password` settings remain supported.
 Existing private configuration files are not modified by this change.
 
+Oracle authentication defaults to `connection.mode: normal`. For an intentional
+administrative test connection, set `connection.user: sys` and
+`connection.mode: sysdba`; do not put `sys as sysdba` in the username field.
+Use a dedicated, appropriately restricted audit account for routine auditing.
+
 ### Evaluation and coverage
 
 SQL Server checks with explicit `Both value columns must show 0/1` audit wording
 and matching configuration-column aliases receive a narrowly inferred comparison.
-Other SELECT results are retained as `MANUAL` unless a reviewed expectation is
-configured. Only simple SELECTs are executed; batches, EXEC, writes and CTEs are
-left for manual review. This is a conservative guard, not a security sandbox:
+Other SELECT results require a reviewed expectation. For source-declared Automated
+controls, missing support is reported as `SKIPPED` with a reason, not `MANUAL`.
+Source-declared Manual controls remain manual. TYPE and `assessment_type` reflect
+the source, not execution success; unrecognized types are `UNKNOWN`.
+Simple SELECTs and two fixed registry-reading batches are supported; arbitrary
+batches, EXEC, writes and CTEs are not enabled. This is a conservative guard, not a security sandbox:
 always use an appropriately restricted audit account and a trusted benchmark.
 
 For a control with exactly one SQL check, an optional rule-ID expectation can be
@@ -127,6 +193,7 @@ python3 -B -m unittest discover -s /home/nox/Desktop/CIS-Compliance-Engine/tests
 * **Rule Cache:** Reuses extracted rules for unchanged documents; missing or invalid cache entries are rebuilt automatically.
 * **Smart Command Detection:** Uses heuristics to distinguish between SQL queries (`SELECT`, `WITH`) and operating-system commands (`grep`, `ls`, `opatch`, etc.).
 * **Multi-line Check Support:** Handles complex, multi-line audit procedures.
+* **Multi-line Titles:** Joins wrapped control headings into a complete single-line title without including section descriptions.
 * **Benchmark-Driven:** Audit logic is derived from the supplied CIS Benchmark PDF rather than hard-coded exclusively in the application.
 
 ### 🛡️ Enterprise-Ready Auditing
@@ -500,10 +567,25 @@ If they execute successfully, CCE can proceed with the relevant automated checks
 
 # 📊 Sample Output
 
+SQL Server Hide Instance and error-log retention checks use two explicitly
+allowlisted, fixed read-only registry batches. Hide Instance must equal 1 and
+error-log retention must be at least 12. Unknown batches are not executed.
+Registry checks require appropriate server privileges and a supported platform;
+execution failures remain ERROR, not a compliance verdict.
+The summary includes `automation_completion`: declared Automated controls with
+PASS/FAIL divided by all declared Automated controls. This is not parser accuracy.
+Many SQL Server Automated controls still lack scope or expectation support;
+this stabilization release does not claim complete Benchmark automation.
+The public-role SQL Agent proxy check uses explicitly qualified msdb tables without
+changing the connection's database context.
+
 CCE provides a tabular summary of the compliance state:
 
-The TITLE column is at least 100 characters wide and expands to the longest
-cleaned title so RESULT stays aligned. Narrow terminals may wrap the output.
+Terminal output is a single-line summary per rule. TITLE matches the longest
+cleaned title, capped at 100 characters; RESULT is capped at 50 characters.
+There are four separator spaces between TITLE and RESULT. Longer values are
+truncated only in the terminal; the generated report retains full titles and
+check outputs. Narrow terminals may still wrap the table.
 
 ```text
 NO.  TIME      TYPE    ID       STATUS   TITLE                                                        RESULT

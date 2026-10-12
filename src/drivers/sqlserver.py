@@ -2,6 +2,7 @@ import importlib
 import os
 import re
 from .base import AuditDriver
+from src.core.sqlserver_checks import REGISTRY_CHECKS, registry_check_name
 
 
 class SQLServerDriver(AuditDriver):
@@ -52,6 +53,10 @@ class SQLServerDriver(AuditDriver):
         return self.execute_policy({'type': check_type, 'cmd': command})
 
     def execute_policy(self, check):
+        if check['type'] == 'sqlserver_registry':
+            return self._run_registry_check(check)
+        if check['type'] == 'manual':
+            return {'status': 'MANUAL', 'output': 'Batch requires variable initialization and procedure execution; review the complete audit script manually'}
         if check['type'] == 'shell':
             return self._run_shell(check['cmd'])
         if check['type'] != 'sql':
@@ -61,6 +66,8 @@ class SQLServerDriver(AuditDriver):
         sql = check['cmd'].strip().rstrip(';')
         # Fail closed on batches and writes. CTEs / EXEC require manual review.
         tokens = re.sub(r"'(?:''|[^'])*'|\[(?:\]\]|[^\]])*\]|\"(?:\"\"|[^\"])*\"", '', sql)
+        if re.search(r'(?<!@)@(?!@)[A-Za-z_]', tokens):
+            return {'status': 'MANUAL', 'output': 'Query depends on local variables; execute the complete audit batch manually'}
         if (not re.match(r'^SELECT\b', sql, re.I) or ';' in tokens
                 or '--' in tokens or '/*' in tokens
                 or re.search(r'\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|EXEC|EXECUTE|INTO|OPENROWSET|OPENDATASOURCE)\b', tokens, re.I)):
@@ -87,5 +94,28 @@ class SQLServerDriver(AuditDriver):
             else:
                 return {'status': 'MANUAL', 'output': output + '; no unambiguous expectation; review required'}
             return {'status': 'PASS' if passed else 'FAIL', 'output': output or 'No rows returned'}
+        except Exception as exc:
+            return {'status': 'ERROR', 'output': str(exc)}
+
+    def _run_registry_check(self, check):
+        name = check.get('operation')
+        if name not in REGISTRY_CHECKS or registry_check_name(check['cmd']) != name:
+            return {'status': 'SKIPPED', 'output': 'Registry batch is not on the read-only allowlist'}
+        if self.cursor is None:
+            return {'status': 'SKIPPED', 'output': 'No DB Connection'}
+        definition = REGISTRY_CHECKS[name]
+        try:
+            # Only fixed, reviewed constants are executed. No writes or dynamic SQL.
+            self.cursor.execute('SET NOCOUNT ON;\n' + definition['source'])
+            while self.cursor.description is None:
+                if not self.cursor.nextset():
+                    return {'status': 'ERROR', 'output': 'Registry batch returned no result set'}
+            rows = self.cursor.fetchall()
+            if len(rows) != 1 or len(rows[0]) != 1 or type(rows[0][0]) is not int:
+                return {'status': 'ERROR', 'output': f'Expected one integer registry value; received {rows!r}'}
+            value = rows[0][0]
+            expected = definition['expectation']
+            passed = value == expected['value'] if expected['mode'] == 'scalar_equal' else value >= expected['value']
+            return {'status': 'PASS' if passed else 'FAIL', 'output': str(rows)}
         except Exception as exc:
             return {'status': 'ERROR', 'output': str(exc)}
