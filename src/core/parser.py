@@ -2,7 +2,8 @@ import pdfplumber
 import re
 import logging
 import sys
-from .sqlserver_checks import REGISTRY_CHECKS, registry_check_name
+from .sqlserver_checks import (REGISTRY_CHECKS, SQLSERVER_EXPECTATIONS,
+                               SQLSERVER_SPECIAL_CHECKS, registry_check_name)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class CISPdfParser:
         cte_start = rf'WITH\s+{identifier}(?:\s*\([^()]*\))?\s+AS\s*\('
         sql_pattern = re.compile(
             rf'^[ \t]*((?:SELECT\b\s+|{cte_start})[\s\S]+?)'
-            r'(?:;|(?=\n\s*(?:Lack|To assess|Remediation|Audit:|Note:)))',
+            r'(?:;|(?=\n\s*(?:Lack|To assess|Remediation|Audit:|Note:))|\Z)',
             re.IGNORECASE | re.MULTILINE)
         
         lines = text.split('\n')
@@ -173,6 +174,18 @@ class CISPdfParser:
         rule['audit_text'] = text.strip()
         assessment = re.search(r'\((Automated|Manual)\)', rule['title'], re.I)
         rule['assessment_type'] = assessment.group(1).upper() if assessment else 'UNKNOWN'
+        special_signatures = {
+            '3.2': r'DATABASE_PRINCIPAL_ID\s*\(\s*[\'\"]guest[\'\"]\s*\)',
+            '3.3': r'EXEC\s+sp_change_users_login',
+            '3.4': r'authentication_type\s*=\s*2',
+            '5.3': r'EXEC\s+xp_loginconfig\s+[\'\"]audit level[\'\"]',
+        }
+        if (self.vendor in ('sqlserver', 'mssql') and rule['id'] in SQLSERVER_SPECIAL_CHECKS
+                and re.search(special_signatures[rule['id']], text, re.I)):
+            definition = SQLSERVER_SPECIAL_CHECKS[rule['id']]
+            rule['checks'].append({'type': 'sqlserver_special', 'cmd': definition['source'],
+                                   'operation': definition['operation']})
+            return
         if self.vendor in ('sqlserver', 'mssql') and re.search(r'^\s*DECLARE\s+@', text, re.I | re.M):
             # Never run the trailing SELECT without its variable initialization.
             # Preserve the batch as evidence; EXEC remains subject to manual review.
@@ -216,6 +229,10 @@ class CISPdfParser:
                     if expected and 'sys.configurations' in clean_q.lower() and all(c in clean_q.lower() for c in ('value_configured', 'value_in_use')):
                         value = int(expected.group(1))
                         check['expectation'] = {'mode': 'columns_equal', 'columns': {'value_configured': value, 'value_in_use': value}}
+                    # Benchmark-specific expectations are reviewed constants,
+                    # used only for their exact control IDs in this benchmark.
+                    if rule['id'] in SQLSERVER_EXPECTATIONS:
+                        check['expectation'] = dict(SQLSERVER_EXPECTATIONS[rule['id']])
                 rule['checks'].append(check)
 
         # Preserve command lines rather than appending arbitrary prose words.

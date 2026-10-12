@@ -279,6 +279,131 @@ SELECT name FROM sys.assemblies;
         driver.cursor.fetchall.return_value = []
         self.assertEqual(driver.execute_policy(check)['status'], 'MANUAL')
 
+    def test_sqlserver_reviewed_expectations(self):
+        text = '''2.9 Ensure setting (Automated)
+Audit:
+SELECT name FROM sys.databases WHERE is_trustworthy_on = 1;
+No rows should be returned.
+Remediation:
+Review manually.
+2.11 Ensure non-standard port (Automated)
+Audit:
+SELECT count(*) FROM sys.dm_server_registry WHERE value_data = '1433';
+A value of 0 implies a pass.
+Remediation:
+Review manually.
+4.3 Ensure policy (Automated)
+Audit:
+SELECT name, is_disabled FROM sys.sql_logins WHERE is_policy_checked = 0;
+Remediation:
+Review manually.
+6.2 Ensure assemblies (Automated)
+Audit:
+SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1;
+All the returned assemblies should show SAFE_ACCESS in the permission_set_desc column.
+Remediation:
+Review manually.
+7.5 Ensure TDE (Automated)
+Audit:
+SELECT database_id, name, is_encrypted FROM sys.databases
+WHERE database_id > 4 AND is_encrypted != 1
+'''
+        rules = CISPdfParser('unused', 'sqlserver')._extract_rules(text)
+        checks = {rule['id']: rule['checks'][0] for rule in rules}
+        self.assertEqual(checks['2.9']['expectation'], {'mode': 'empty_rows'})
+        self.assertEqual(checks['2.11']['expectation'], {'mode': 'scalar_equal', 'value': 0})
+        self.assertEqual(checks['4.3']['expectation'], {'mode': 'all_rows_equal', 'columns': {'is_disabled': 1}})
+        self.assertEqual(checks['6.2']['expectation'], {'mode': 'all_rows_equal', 'columns': {'permission_set_desc': 'SAFE_ACCESS'}})
+        self.assertEqual(checks['7.5']['expectation'], {'mode': 'empty_rows'})
+
+    def test_sqlserver_extended_expectation_evaluation(self):
+        driver = SQLServerDriver({}); driver.cursor = Mock()
+        cases = [
+            ({'mode': 'all_rows_equal', 'columns': {'is_disabled': 1}}, [('name',), ('is_disabled',)], [], 'PASS'),
+            ({'mode': 'all_rows_equal', 'columns': {'is_disabled': 1}}, [('name',), ('is_disabled',)], [('login', 1)], 'PASS'),
+            ({'mode': 'all_rows_equal', 'columns': {'is_disabled': 1}}, [('name',), ('is_disabled',)], [('login', 0)], 'FAIL'),
+            ({'mode': 'no_column_value', 'column': 'name', 'value': 'sa'}, [('name',)], [('renamed_sa',)], 'PASS'),
+            ({'mode': 'no_column_value', 'column': 'name', 'value': 'sa'}, [('name',)], [('sa',)], 'FAIL'),
+            ({'mode': 'all_scalar_equal', 'value': 'TRUE'}, [('encrypt_option',)], [('TRUE',)], 'PASS'),
+            ({'mode': 'all_scalar_equal', 'value': 'TRUE'}, [('encrypt_option',)], [('FALSE',)], 'FAIL'),
+        ]
+        for expectation, description, rows, status in cases:
+            with self.subTest(expectation=expectation, rows=rows):
+                driver.cursor.description = description
+                driver.cursor.fetchall.return_value = rows
+                self.assertEqual(driver.execute_policy({'type': 'sql', 'cmd': 'SELECT 1', 'expectation': expectation})['status'], status)
+
+    def test_sqlserver_audit_groups_expectation(self):
+        driver = SQLServerDriver({}); driver.cursor = Mock()
+        driver.cursor.description = [('audit enabled',), ('audit specification enabled',),
+                                     ('audit_action_name',), ('audited_result',)]
+        check = {'type': 'sql', 'cmd': 'SELECT 1', 'expectation': {
+            'mode': 'audit_groups',
+            'groups': ('AUDIT_CHANGE_GROUP', 'FAILED_LOGIN_GROUP', 'SUCCESSFUL_LOGIN_GROUP'),
+            'columns': {'audit enabled': 'Y', 'audit specification enabled': 'Y'},
+        }}
+        valid = [('Y', 'Y', group, 'SUCCESS AND FAILURE') for group in check['expectation']['groups']]
+        for rows, status in ((valid, 'PASS'), (valid[:-1], 'FAIL'),
+                             (valid[:-1] + [('N', 'Y', 'SUCCESSFUL_LOGIN_GROUP', 'SUCCESS AND FAILURE')], 'FAIL')):
+            driver.cursor.fetchall.return_value = rows
+            self.assertEqual(driver.execute_policy(check)['status'], status)
+
+    def test_sqlserver_special_checks_are_extracted_and_allowlisted(self):
+        text = '''3.2 Ensure guest permission (Automated)
+Audit:
+SELECT * FROM sys.database_permissions
+WHERE grantee_principal_id = DATABASE_PRINCIPAL_ID('guest');
+3.3 Ensure orphaned users (Automated)
+Audit:
+EXEC sp_change_users_login @Action='Report';
+3.4 Ensure contained users (Automated)
+Audit:
+SELECT * FROM sys.database_principals WHERE authentication_type = 2;
+5.3 Ensure login auditing (Automated)
+Audit:
+EXEC xp_loginconfig 'audit level';
+'''
+        rules = CISPdfParser('unused', 'sqlserver')._extract_rules(text)
+        self.assertEqual([rule['checks'][0]['type'] for rule in rules], ['sqlserver_special'] * 4)
+        self.assertEqual([rule['checks'][0]['operation'] for rule in rules],
+                         ['guest_connect', 'orphaned_users', 'contained_sql_authentication', 'login_auditing'])
+        driver = SQLServerDriver({}); driver.cursor = Mock()
+        self.assertEqual(driver.execute_policy({'type': 'sqlserver_special', 'cmd': 'SELECT 1',
+                                                'operation': 'guest_connect'})['status'], 'SKIPPED')
+        driver.cursor.execute.assert_not_called()
+
+    def test_sqlserver_special_database_checks(self):
+        driver = SQLServerDriver({}); cursor = driver.cursor = Mock()
+        check = CISPdfParser('unused', 'sqlserver')._extract_rules('''3.2 Ensure guest permission (Automated)
+Audit:
+SELECT * FROM sys.database_permissions
+WHERE grantee_principal_id = DATABASE_PRINCIPAL_ID('guest');
+''')[0]['checks'][0]
+        cursor.fetchall.side_effect = [[('appdb',), ('otherdb',)], [], []]
+        self.assertEqual(driver.execute_policy(check)['status'], 'PASS')
+        self.assertIn('USE [appdb]', cursor.execute.call_args_list[1].args[0])
+        self.assertIn('USE [otherdb]', cursor.execute.call_args_list[2].args[0])
+
+        cursor.reset_mock(); cursor.fetchall.side_effect = [[('appdb',)], [('guest', 'CONNECT', 'GRANT')]]
+        result = driver.execute_policy(check)
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertIn("('appdb', 'guest', 'CONNECT', 'GRANT')", result['output'])
+
+    def test_sqlserver_login_auditing_special_check(self):
+        driver = SQLServerDriver({}); cursor = driver.cursor = Mock()
+        check = CISPdfParser('unused', 'sqlserver')._extract_rules('''5.3 Ensure login auditing (Automated)
+Audit:
+EXEC xp_loginconfig 'audit level';
+''')[0]['checks'][0]
+        cursor.description = [('name',), ('config_value',)]
+        for rows, status in (([('audit level', 'failure')], 'PASS'),
+                             ([('audit level', 'all')], 'PASS'),
+                             ([('audit level', 'none')], 'FAIL')):
+            cursor.fetchall.return_value = rows
+            cursor.nextset.return_value = False
+            self.assertEqual(driver.execute_policy(check)['status'], status)
+        self.assertIn("EXEC xp_loginconfig 'audit level'", cursor.execute.call_args.args[0])
+
     def test_writes_are_not_executed(self):
         driver = SQLServerDriver({}); driver.cursor = Mock()
         for sql in ('EXEC sp_configure', 'SELECT 1; DROP TABLE x', 'SELECT * INTO x FROM y'):

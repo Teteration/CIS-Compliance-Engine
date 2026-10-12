@@ -7,6 +7,8 @@ checks against Oracle or SQL Server, and generates JSON/TXT reports.
 Extraction is heuristic, not a guarantee of full coverage or correct interpretation
 of every control. Review the evidence alongside the score.
 
+<img width="2665" height="1135" alt="CCE terminal audit output" src="https://github.com/user-attachments/assets/8095bdb1-e674-4f7e-a9f3-ca469977faf2" />
+
 ## Features
 
 - Direct database connections, with optional SSH for operating-system checks.
@@ -17,14 +19,12 @@ of every control. Review the evidence alongside the score.
 
 ## Install
 
-Use Python 3.10+. Commands below assume the project is located at
-`/home/nox/Desktop/CIS-Compliance-Engine`; adjust that path if needed.
+Use Python 3.10+. Run commands from the repository root.
 
 ```bash
-cd /home/nox/Desktop/CIS-Compliance-Engine
-python3 -m venv /home/nox/Desktop/CIS-Compliance-Engine/.venv
-source /home/nox/Desktop/CIS-Compliance-Engine/.venv/bin/activate
-python -m pip install -r /home/nox/Desktop/CIS-Compliance-Engine/requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 SQL Server uses `mssql-python`; its native runtime dependencies must also be
@@ -35,8 +35,8 @@ available on your operating system.
 Copy the example for your target without overwriting an existing local file:
 
 ```bash
-cp -n /home/nox/Desktop/CIS-Compliance-Engine/config/oracle.example.yaml /home/nox/Desktop/CIS-Compliance-Engine/config/oracle.local.yaml
-cp -n /home/nox/Desktop/CIS-Compliance-Engine/config/sqlserver.example.yaml /home/nox/Desktop/CIS-Compliance-Engine/config/sqlserver.local.yaml
+cp -n config/oracle.example.yaml config/oracle.local.yaml
+cp -n config/sqlserver.example.yaml config/sqlserver.local.yaml
 ```
 
 Edit the chosen local file:
@@ -83,10 +83,10 @@ From the project root, with the virtual environment active:
 
 ```bash
 # Oracle
-python -m src.main -c /home/nox/Desktop/CIS-Compliance-Engine/config/oracle.local.yaml
+python -m src.main -c config/oracle.local.yaml
 
 # SQL Server
-python -m src.main -c /home/nox/Desktop/CIS-Compliance-Engine/config/sqlserver.local.yaml
+python -m src.main -c config/sqlserver.local.yaml
 ```
 
 Rules are cached at `.cache/rules.json` by default. Set `audit.rules_cache` to

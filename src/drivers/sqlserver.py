@@ -2,7 +2,8 @@ import importlib
 import os
 import re
 from .base import AuditDriver
-from src.core.sqlserver_checks import REGISTRY_CHECKS, registry_check_name
+from src.core.sqlserver_checks import (REGISTRY_CHECKS, SQLSERVER_SPECIAL_CHECKS,
+                                       registry_check_name)
 
 
 class SQLServerDriver(AuditDriver):
@@ -55,6 +56,8 @@ class SQLServerDriver(AuditDriver):
     def execute_policy(self, check):
         if check['type'] == 'sqlserver_registry':
             return self._run_registry_check(check)
+        if check['type'] == 'sqlserver_special':
+            return self._run_special_check(check)
         if check['type'] == 'manual':
             return {'status': 'MANUAL', 'output': 'Batch requires variable initialization and procedure execution; review the complete audit script manually'}
         if check['type'] == 'shell':
@@ -91,6 +94,25 @@ class SQLServerDriver(AuditDriver):
                 passed = all(all(row[indexes[name]] == value for name, value in expected.items()) for row in rows)
             elif mode == 'scalar_equal':
                 passed = len(rows) == 1 and len(rows[0]) == 1 and rows[0][0] == expectation['value']
+            elif mode == 'all_scalar_equal':
+                passed = bool(rows) and all(len(row) == 1 and row[0] == expectation['value'] for row in rows)
+            elif mode == 'all_rows_equal':
+                expected = expectation['columns']
+                indexes = {name: columns.index(name.lower()) for name in expected}
+                passed = all(all(row[indexes[name]] == value for name, value in expected.items()) for row in rows)
+            elif mode == 'no_column_value':
+                index = columns.index(expectation['column'].lower())
+                passed = all(row[index] != expectation['value'] for row in rows)
+            elif mode == 'audit_groups':
+                indexes = {name: columns.index(name.lower()) for name in ('audit_action_name', *expectation['columns'])}
+                groups = {row[indexes['audit_action_name']]: row for row in rows}
+                passed = all(
+                    group in groups and all(groups[group][indexes[name]] == value
+                                           for name, value in expectation['columns'].items())
+                    and 'SUCCESS' in str(groups[group][columns.index('audited_result')]).upper()
+                    and 'FAILURE' in str(groups[group][columns.index('audited_result')]).upper()
+                    for group in expectation['groups']
+                )
             else:
                 return {'status': 'MANUAL', 'output': output + '; no unambiguous expectation; review required'}
             return {'status': 'PASS' if passed else 'FAIL', 'output': output or 'No rows returned'}
@@ -117,5 +139,42 @@ class SQLServerDriver(AuditDriver):
             expected = definition['expectation']
             passed = value == expected['value'] if expected['mode'] == 'scalar_equal' else value >= expected['value']
             return {'status': 'PASS' if passed else 'FAIL', 'output': str(rows)}
+        except Exception as exc:
+            return {'status': 'ERROR', 'output': str(exc)}
+
+    @staticmethod
+    def _quote_identifier(value):
+        return '[' + str(value).replace(']', ']]') + ']'
+
+    def _run_special_check(self, check):
+        operation = check.get('operation')
+        definition = next((item for item in SQLSERVER_SPECIAL_CHECKS.values()
+                           if item['operation'] == operation), None)
+        if definition is None or check.get('cmd', '').strip() != definition['source']:
+            return {'status': 'SKIPPED', 'output': 'Special SQL Server check is not on the read-only allowlist'}
+        if self.cursor is None:
+            return {'status': 'SKIPPED', 'output': 'No DB Connection'}
+        try:
+            if operation == 'login_auditing':
+                self.cursor.execute(definition['source'])
+                while self.cursor.description is None:
+                    if not self.cursor.nextset():
+                        return {'status': 'ERROR', 'output': 'Login auditing batch returned no result set'}
+                rows = self.cursor.fetchall()
+                columns = [item[0].lower() for item in self.cursor.description]
+                value_index = columns.index('config_value')
+                values = [str(row[value_index]).strip().lower() for row in rows]
+                passed = len(values) == 1 and values[0] in definition['accepted_values']
+                return {'status': 'PASS' if passed else 'FAIL', 'output': str(rows) or 'No rows returned'}
+
+            self.cursor.execute(definition['source'])
+            databases = [row[0] for row in self.cursor.fetchall()]
+            findings = []
+            for database in databases:
+                self.cursor.execute(f'USE {self._quote_identifier(database)};\n{definition["query"]}')
+                rows = self.cursor.fetchall()
+                findings.extend((database, *row) for row in rows)
+            return {'status': 'PASS' if not findings else 'FAIL',
+                    'output': str(findings) if findings else 'No rows returned'}
         except Exception as exc:
             return {'status': 'ERROR', 'output': str(exc)}
