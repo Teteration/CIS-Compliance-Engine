@@ -210,6 +210,19 @@ Review manually.
                          ["SELECT value FROM v$parameter WHERE name = 'example'"])
         self.assertIn('with this recommendation', rule['audit_text'])
 
+    def test_trailing_select_comma_from_pdf_is_removed(self):
+        text = '''4.2 Ensure no custom maintained users exist (Automated)
+Audit:
+SELECT CON_ID_TO_CON_NAME(C.CON_ID) AS CONTAINERNAME, USERNAME,
+FROM CDB_USERS C
+WHERE ORACLE_MAINTAINED = 'Y';
+Remediation:
+Review manually.
+'''
+        rule = CISPdfParser('unused', 'oracle')._extract_rules(text)[0]
+        self.assertEqual(rule['checks'][0]['cmd'],
+                         "SELECT CON_ID_TO_CON_NAME(C.CON_ID) AS CONTAINERNAME, USERNAME FROM CDB_USERS C\nWHERE ORACLE_MAINTAINED = 'Y'")
+
     def test_pdf_footer_removed_from_multiline_sql(self):
         text = '''3.3 Ensure setting (Automated)
 Audit:
@@ -381,13 +394,30 @@ WHERE grantee_principal_id = DATABASE_PRINCIPAL_ID('guest');
 ''')[0]['checks'][0]
         cursor.fetchall.side_effect = [[('appdb',), ('otherdb',)], [], []]
         self.assertEqual(driver.execute_policy(check)['status'], 'PASS')
-        self.assertIn('USE [appdb]', cursor.execute.call_args_list[1].args[0])
-        self.assertIn('USE [otherdb]', cursor.execute.call_args_list[2].args[0])
+        self.assertEqual(cursor.execute.call_args_list[1].args[0], 'USE [appdb]')
+        self.assertIn('FROM sys.database_permissions', cursor.execute.call_args_list[2].args[0])
+        self.assertEqual(cursor.execute.call_args_list[3].args[0], 'USE [otherdb]')
+        self.assertIn('FROM sys.database_permissions', cursor.execute.call_args_list[4].args[0])
+        self.assertEqual(cursor.execute.call_args_list[5].args[0], 'USE [master]')
 
         cursor.reset_mock(); cursor.fetchall.side_effect = [[('appdb',)], [('guest', 'CONNECT', 'GRANT')]]
         result = driver.execute_policy(check)
         self.assertEqual(result['status'], 'FAIL')
         self.assertIn("('appdb', 'guest', 'CONNECT', 'GRANT')", result['output'])
+
+        cursor.reset_mock(); cursor.fetchall.side_effect = [[('rdsadmin',)], [('guest', 'CONNECT', 'GRANT')]]
+        self.assertEqual(driver.execute_policy(check)['status'], 'PASS')
+
+    def test_sqlserver_tde_query_stops_before_expected_result_prose(self):
+        rule = CISPdfParser('unused', 'sqlserver')._extract_rules('''7.5 Ensure TDE (Automated)
+Audit:
+SELECT database_id, name, is_encrypted FROM sys.databases
+WHERE database_id > 4 AND is_encrypted != 1
+The query should return no rows
+''')[0]
+        check = rule['checks'][0]
+        self.assertEqual(check['cmd'], 'SELECT database_id, name, is_encrypted FROM sys.databases\nWHERE database_id > 4 AND is_encrypted != 1')
+        self.assertEqual(check['expectation'], {'mode': 'empty_rows'})
 
     def test_sqlserver_login_auditing_special_check(self):
         driver = SQLServerDriver({}); cursor = driver.cursor = Mock()

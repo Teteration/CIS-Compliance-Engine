@@ -20,6 +20,9 @@ class ReporterTests(unittest.TestCase):
             for path in Path(tmp).iterdir():
                 self.assertNotIn('\x1b', path.read_text())
                 self.assertNotIn('\\u001b', path.read_text())
+            self.assertEqual(len(list(Path(tmp).glob('*.json'))), 1)
+            self.assertEqual(len(list(Path(tmp).glob('*.html'))), 1)
+            self.assertEqual(len(list(Path(tmp).glob('*.txt'))), 0)
         text = output.getvalue()
         self.assertNotIn('not parser accuracy', text)
         self.assertIn(Fore.LIGHTCYAN_EX, text)
@@ -46,26 +49,43 @@ class ReporterTests(unittest.TestCase):
                         self.assertIn(f'Of {len(statuses)} total controls, 0 were evaluated:', text)
                         self.assertIn('Score is N/A because no controls have a PASS/FAIL verdict.', text)
 
-    def test_report_flattens_field_newlines_without_mutating_input(self):
+    def test_reports_flatten_field_newlines_without_mutating_input(self):
         results = [{'id': '1.1', 'title': 'Ensure\nsetting', 'result': 'MANUAL',
                     'assessment_type': 'MANUAL', 'audit_text': 'First\r\nsecond\rthird',
                     'checks': [{'cmd': 'SELECT\n1', 'type': 'sql',
                                 'status': 'MANUAL', 'output': 'line1\nline2'}]}]
         original = copy.deepcopy(results)
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
-            txt_path = Reporter(tmp).generate(results, 'test\nhost')
+            html_path = Reporter(tmp).generate(results, 'test\nhost')
             report = json.loads(next(Path(tmp).glob('*.json')).read_text())
-            text = Path(txt_path).read_text()
+            text = Path(html_path).read_text()
         rule = report['results'][0]
         self.assertEqual(rule['title'], 'Ensure setting')
         self.assertEqual(rule['audit_text'], 'First second third')
         self.assertEqual(rule['checks'][0]['cmd'], 'SELECT 1')
         self.assertEqual(rule['checks'][0]['output'], 'line1 line2')
         self.assertEqual(report['summary']['target'], 'test host')
-        self.assertIn('   Out: line1 line2\n', text)
-        self.assertIn('   Audit procedure: First second third\n', text)
-        self.assertIn('   Cmd: SELECT 1...\n', text)
+        self.assertIn('line1 line2', text)
+        self.assertIn('First second third', text)
+        self.assertIn('SELECT 1', text)
         self.assertEqual(results, original)
+
+    def test_html_report_has_escaped_evidence_and_filters(self):
+        results = [{'id': '1.1', 'title': 'Ensure <safe> & secure', 'result': 'FAIL',
+                    'assessment_type': 'AUTOMATED', 'audit_text': 'Review <script>alert(1)</script>',
+                    'checks': [{'type': 'sql', 'cmd': 'SELECT "<value>"',
+                                'status': 'FAIL', 'output': '<failed & evidence>'}]}]
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            html_path = Reporter(tmp).generate(results, 'target')
+            text = Path(html_path).read_text()
+        self.assertTrue(html_path.endswith('.html'))
+        self.assertIn('Compliance Report', text)
+        self.assertIn('data-filter="SKIPPED"', text)
+        self.assertIn('View evidence (1)', text)
+        self.assertIn('Ensure &lt;safe&gt; &amp; secure', text)
+        self.assertIn('&lt;failed &amp; evidence&gt;', text)
+        self.assertNotIn('<script>alert(1)</script>', text)
+        self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', text)
 
     def test_literal_backslashes_and_nonstring_values_are_preserved(self):
         value = {'path': r'C:\new\report', 'count': 2, 'empty': None,

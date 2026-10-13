@@ -170,10 +170,24 @@ class SQLServerDriver(AuditDriver):
             self.cursor.execute(definition['source'])
             databases = [row[0] for row in self.cursor.fetchall()]
             findings = []
-            for database in databases:
-                self.cursor.execute(f'USE {self._quote_identifier(database)};\n{definition["query"]}')
-                rows = self.cursor.fetchall()
-                findings.extend((database, *row) for row in rows)
+            original_database = self.config.get('connection', {}).get('database', 'master')
+            try:
+                for database in databases:
+                    # Execute USE separately. mssql-python exposes no fetchable
+                    # result set for USE, so combining it with SELECT leaves the
+                    # cursor in an invalid state.
+                    self.cursor.execute(f'USE {self._quote_identifier(database)}')
+                    self.cursor.execute(definition['query'])
+                    rows = self.cursor.fetchall()
+                    findings.extend((database, *row) for row in rows)
+            finally:
+                # Do not leak a per-database context into later benchmark checks.
+                self.cursor.execute(f'USE {self._quote_identifier(original_database)}')
+
+            # CIS explicitly permits the RDS administration database as the only
+            # finding for recommendation 3.2.
+            if operation == 'guest_connect':
+                findings = [finding for finding in findings if finding[0].lower() != 'rdsadmin']
             return {'status': 'PASS' if not findings else 'FAIL',
                     'output': str(findings) if findings else 'No rows returned'}
         except Exception as exc:

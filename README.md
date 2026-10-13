@@ -1,7 +1,7 @@
 # CIS Compliance Engine (CCE)
 
 CCE extracts audit checks from user-supplied CIS Benchmark PDFs, runs supported
-checks against Oracle or SQL Server, and generates JSON/TXT reports.
+checks against Oracle or SQL Server, and generates JSON/HTML reports.
 
 **Experimental:** current focus is Oracle Database 19c and SQL Server 2017.
 Extraction is heuristic, not a guarantee of full coverage or correct interpretation
@@ -95,8 +95,12 @@ PDF extraction. Changing credentials does not require refreshing rules.
 
 ## Results
 
-Both JSON and TXT reports are written to the configured output directory,
+Both JSON and self-contained HTML reports are written to the configured output directory,
 regardless of `reporting.format`.
+
+Open the HTML file in a browser for a searchable report with status cards,
+metadata, and expandable command/output evidence. It has no external CDN or
+Internet dependency. JSON remains available for automation and integrations.
 
 | Status | Meaning |
 | --- | --- |

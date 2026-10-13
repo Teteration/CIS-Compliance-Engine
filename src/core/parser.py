@@ -203,6 +203,16 @@ class CISPdfParser:
         for q in sqls:
             if isinstance(q, tuple): q = q[0]
             clean_q = q.strip()
+            # Some CIS audit procedures omit a terminating semicolon and put the
+            # expected-result sentence on the following line. That prose is not
+            # T-SQL and must never be sent to the server.
+            clean_q = re.split(
+                r'\n\s*(?:The\s+query\s+should\s+return|No\s+rows\s+should\s+be\s+returned|'
+                r'For\s+compliance\s*,?\s*no\s+rows\s+should\s+be\s+returned)\b',
+                clean_q, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            # Some PDF extractions preserve a presentation comma at the end of a
+            # SELECT list. A comma immediately before FROM is never valid SQL.
+            clean_q = re.sub(r',\s*(\bFROM\b)', r' \1', clean_q, flags=re.IGNORECASE)
             if clean_q.upper().startswith("SELECT") or clean_q.upper().startswith("WITH"):
                 check = {'type': 'sql', 'cmd': clean_q}
                 if self.vendor in ('sqlserver', 'mssql'):

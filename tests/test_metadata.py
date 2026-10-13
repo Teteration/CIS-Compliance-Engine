@@ -51,3 +51,4 @@ class MetadataTests(unittest.TestCase):
         for value in ('TEST', '19.3', 'CIS Oracle Database Benchmark', '1.0.0'):
             self.assertIn(value, text)
             self.assertIn(value, output.getvalue())
+        self.assertTrue(path.endswith('.html'))
